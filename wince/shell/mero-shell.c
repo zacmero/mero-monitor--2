@@ -20,6 +20,7 @@
 
 #define PATH_TERMINAL       L"\\SDMMC\\MERO\\mero-terminal.exe"
 #define PATH_PROBE          L"\\SDMMC\\MERO\\mero-probe.exe"
+#define PATH_CMD            L"\\SDMMC\\MERO\\mero-cmd.exe"
 #define PATH_GPS            L"\\SDMMC\\MERO\\mero-gps.exe"
 #define PATH_IGO8           L"\\SDMMC\\IGO8\\iGO8.exe"
 #define PATH_CONTROL        L"\\Windows\\control.exe"
@@ -348,8 +349,8 @@ static void UpdateButtons(void)
         lstrcpyW(g_buttons[0].sub,   L"Mero Mind / Artifact Stream");
         g_buttons[0].color = RGB(0, 255, 128);
 
-        lstrcpyW(g_buttons[1].title, L"[2] GPS SENSOR");
-        lstrcpyW(g_buttons[1].sub,   L"COM1: 9600 Baud NMEA Stream");
+        lstrcpyW(g_buttons[1].title, L"[2] MERO CMD SHELL");
+        lstrcpyW(g_buttons[1].sub,   L"Process Mgr & Interactive CLI");
         g_buttons[1].color = RGB(0, 220, 255);
 
         lstrcpyW(g_buttons[2].title, L"[3] SYSTEM PROBE");
@@ -529,12 +530,12 @@ static void OnTouch(int x, int y)
                     }
                     break;
 
-                case 1: /* GPS Monitor */
-                    wsprintfW(g_statusMsg, L"Launching GPS Monitor...");
+                case 1: /* Mero CMD Shell */
+                    wsprintfW(g_statusMsg, L"Launching Mero CMD Shell...");
                     InvalidateRect(g_hWnd, NULL, FALSE);
                     UpdateWindow(g_hWnd);
-                    if (!LaunchApp(PATH_GPS, TRUE)) {
-                        wsprintfW(g_statusMsg, L"GPS monitor binary pending: %s", PATH_GPS);
+                    if (!LaunchApp(PATH_CMD, TRUE)) {
+                        wsprintfW(g_statusMsg, L"CMD binary not found: %s", PATH_CMD);
                         InvalidateRect(g_hWnd, NULL, FALSE);
                     }
                     break;

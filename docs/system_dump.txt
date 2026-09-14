@@ -1,0 +1,72 @@
+========================================
+   MERO MONITOR #2: SYSTEM DISCOVERY    
+========================================
+
+[ROOT DIRECTORIES & STORAGE VOLUMES]
+DIR: \ResidentFlash
+DIR: \SDMMC
+DIR: \Recycled
+DIR: \Application Data
+DIR: \My Documents
+DIR: \Program Files
+DIR: \Temp
+DIR: \Windows
+
+[REGISTRY: HKEY_LOCAL_MACHINE\init (Startup Launch Sequence)]
+  Launch20 = "device.exe"
+  Launch30 = "gwes.exe"
+  Launch60 = "services.exe"
+  Launch50 = "launch.exe"
+  Launch80 = "btpower.exe"
+
+[REGISTRY: HKEY_LOCAL_MACHINE\Drivers\BuiltIn (Hardware Subsystems)]
+  DRIVER: NDIS
+  DRIVER: PPP
+  DRIVER: autoras
+  DRIVER: NdisPower
+  DRIVER: AFD
+  DRIVER: SDBusDriver
+  DRIVER: TAPI
+  DRIVER: WAPIMAN
+  DRIVER: SIP
+  DRIVER: BtA2dpSnd
+  DRIVER: MSFLASH
+  DRIVER: GPIO
+  DRIVER: DMA
+  DRIVER: BKL
+  DRIVER: PWM
+  DRIVER: I2C
+  DRIVER: SPI
+  DRIVER: Uart1
+  DRIVER: Uart2
+  DRIVER: Uart3
+  DRIVER: Uart4
+  DRIVER: HciExt
+  DRIVER: Touch
+  DRIVER: WavformDriver
+  DRIVER: DdeDrv
+  DRIVER: SDHC
+  DRIVER: UsbFn
+  DRIVER: GPS
+  DRIVER: GPS2
+  DRIVER: MSDK
+  DRIVER: Battery
+  DRIVER: SPC
+  DRIVER: fmc
+  DRIVER: ViatualCom01
+  DRIVER: ViatualCom02
+
+[FILES IN \ResidentFlash (Internal Storage)]
+  (No \ResidentFlash volume found or empty)
+
+[KEY EXECUTABLES IN \Windows]
+cmd.exe  |  connmc.exe  |  rnaapp.exe  |  services.exe
+explorer.exe  |  iexplore.exe  |  peghelp.exe  |  control.exe
+ctlpnl.exe  |  docviewer.exe  |  presviewer.exe  |  xls.exe
+pdfviewer.exe  |  repllog.exe  |  udp2tcp.exe  |  rapisrv.exe
+wceload.exe  |  unload.exe  |  eventrst.exe  |  cgacutil.exe
+MT3351Calibration.exe  |  Launch.exe  |  USBDetect.exe  |  TouchCalibrate.exe
+PowerOff.exe  |  avin.exe  |  btpower.exe  |  nk.exe
+filesys.exe  |  gwes.exe  |  device.exe  |  
+
+=== END OF DISCOVERY DUMP ===

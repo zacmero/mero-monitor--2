@@ -9,38 +9,46 @@ This document records all confirmed hardware, firmware, and peripheral specifica
 | Property | Value / Specification | Notes |
 | :--- | :--- | :--- |
 | **Device Model** | Foston FS-460BT | Generic PNA / WinCE GPS class |
+| **SoC / Processor** | MediaTek MT3351 (ARM926EJ-S) | Confirmed via `MT3351Calibration.exe` |
 | **Operating System** | Microsoft Windows CE 5.0 (Build 1400) | Verified via `mero-probe` on hardware |
-| **Processor Architecture** | ARMv4 / ARMv4I | 32-bit Little-Endian PE32 binaries |
+| **Processor Architecture** | ARMv4 / ARMv4I / ARMv5TEJ | 32-bit Little-Endian PE32 binaries |
 | **Display Resolution** | 480 × 272 pixels | Verified 16 bpp RGB565 |
-| **Touchscreen** | Resistive single-touch | Verified responsive via `mero-probe` |
+| **Touchscreen** | Resistive single-touch | Handled via `Touch` driver & `TouchCalibrate.exe` |
 | **Color Depth / Pixel Format** | 16-bit RGB565 | Confirmed via hardware probe & Sygic config |
 | **RAM** | 53 MB usable (64 MB physical) | ~38 MB free at baseline (28% load) |
-| **Internal Flash / ROM** | 128 MB | Reported by device system information |
+| **Internal Flash / ROM** | 128 MB | NAND flash (`MSFLASH` driver) |
 | **External Storage** | 8 GB SD / MicroSD card | Mounted in WinCE as `\SDMMC` |
 
 ---
 
-## 2. Ports & Peripherals
+## 2. Ports & Peripherals (Discovered via Architecture Dump)
 
 ### GPS Module
-- **Interface**: Internal UART
+- **Interface**: Internal UART (`Uart1` / `GPS` / `GPS2` drivers)
 - **Device Port**: `COM1:`
 - **Baud Rate**: `9600` baud
 - **Data Protocol**: NMEA-0183 standard sentences (`$GPGGA`, `$GPRMC`, `$GPGSV`, etc.)
 
+### Bluetooth & Audio
+- **Bluetooth Subsystem**: `HciExt` driver + `btpower.exe` (launched on boot at `Launch80`)
+- **A2DP Audio**: Native `BtA2dpSnd` driver present in Windows CE
+- **FM Transmitter**: Native `fmc` driver present in `HKLM\Drivers\BuiltIn\fmc`
+
 ### USB Controller & Modes
-The device supports two switchable USB controller profiles in the vendor settings:
+The device supports two switchable USB controller profiles (`UsbFn` driver):
+1. **Mass Storage Mode**: VID:PID `045e:ffff` (`Microsoft Windows CE Mass Storage`)
+2. **ActiveSync Mode**: VID:PID `045e:00ce` (`Microsoft Generic PPC Flash device`) -> Linux `ipaq` -> `/dev/ttyUSB0`
 
-1. **Mass Storage Mode**
-   - USB VID:PID: `045e:ffff` (`Microsoft Windows CE Mass Storage`)
-   - Function: Exposes `\SDMMC` as a standard USB Mass Storage block device to the host.
+---
 
-2. **ActiveSync Mode**
-   - USB VID:PID: `045e:00ce` (`Microsoft Generic PPC Flash device`)
-   - Linux Driver: Binds to kernel module `ipaq`
-   - Linux Device Node: `/dev/ttyUSB0`
-   - Kernel dmesg confirmation: `PocketPC PDA converter now attached to ttyUSB0`
-   - Protocol: Windows CE ActiveSync / RAPI transport layer.
+## 3. Windows CE Boot Sequence (`HKLM\init`)
+
+The confirmed boot sequence recorded from hardware dump:
+* `Launch20` = `device.exe` (Device driver manager)
+* `Launch30` = `gwes.exe` (Graphics, Windowing, and Events Subsystem)
+* `Launch50` = `Launch.exe` (**The Vendor PNA Shell!**)
+* `Launch60` = `services.exe` (Service manager)
+* `Launch80` = `btpower.exe` (Bluetooth power initializer)
 
 ### Additional Features / Peripherals (To Explore)
 - **Bluetooth**: Present on hardware (`-BT` suffix), RFCOMM/DUN profile support in WinCE.
