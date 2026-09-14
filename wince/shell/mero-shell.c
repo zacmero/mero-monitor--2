@@ -173,7 +173,7 @@ static void UpdateSystemStatus(void)
 }
 
 /* Launch an external application */
-static BOOL LaunchApp(const WCHAR *path)
+static BOOL LaunchApp(const WCHAR *path, BOOL minimizeShell)
 {
     PROCESS_INFORMATION pi;
     BOOL ret;
@@ -183,6 +183,10 @@ static BOOL LaunchApp(const WCHAR *path)
     if (ret) {
         CloseHandle(pi.hProcess);
         CloseHandle(pi.hThread);
+        if (minimizeShell && g_hWnd) {
+            /* Yield focus cleanly so launched app takes full screen */
+            ShowWindow(g_hWnd, SW_MINIMIZE);
+        }
     }
     return ret;
 }
@@ -519,7 +523,7 @@ static void OnTouch(int x, int y)
                     wsprintfW(g_statusMsg, L"Launching Thought Terminal...");
                     InvalidateRect(g_hWnd, NULL, FALSE);
                     UpdateWindow(g_hWnd);
-                    if (!LaunchApp(PATH_TERMINAL)) {
+                    if (!LaunchApp(PATH_TERMINAL, TRUE)) {
                         wsprintfW(g_statusMsg, L"Terminal binary pending: %s", PATH_TERMINAL);
                         InvalidateRect(g_hWnd, NULL, FALSE);
                     }
@@ -529,7 +533,7 @@ static void OnTouch(int x, int y)
                     wsprintfW(g_statusMsg, L"Launching GPS Monitor...");
                     InvalidateRect(g_hWnd, NULL, FALSE);
                     UpdateWindow(g_hWnd);
-                    if (!LaunchApp(PATH_GPS)) {
+                    if (!LaunchApp(PATH_GPS, TRUE)) {
                         wsprintfW(g_statusMsg, L"GPS monitor binary pending: %s", PATH_GPS);
                         InvalidateRect(g_hWnd, NULL, FALSE);
                     }
@@ -539,7 +543,7 @@ static void OnTouch(int x, int y)
                     wsprintfW(g_statusMsg, L"Launching Hardware Probe...");
                     InvalidateRect(g_hWnd, NULL, FALSE);
                     UpdateWindow(g_hWnd);
-                    if (!LaunchApp(PATH_PROBE)) {
+                    if (!LaunchApp(PATH_PROBE, TRUE)) {
                         wsprintfW(g_statusMsg, L"Probe not found: %s", PATH_PROBE);
                         InvalidateRect(g_hWnd, NULL, FALSE);
                     }
@@ -569,7 +573,7 @@ static void OnTouch(int x, int y)
                     wsprintfW(g_statusMsg, L"Launching Windows Control Panel...");
                     InvalidateRect(g_hWnd, NULL, FALSE);
                     UpdateWindow(g_hWnd);
-                    if (!LaunchApp(PATH_CONTROL)) {
+                    if (!LaunchApp(PATH_CONTROL, TRUE)) {
                         wsprintfW(g_statusMsg, L"control.exe not available on this ROM");
                         InvalidateRect(g_hWnd, NULL, FALSE);
                     }
@@ -579,7 +583,7 @@ static void OnTouch(int x, int y)
                     wsprintfW(g_statusMsg, L"Launching Windows Explorer...");
                     InvalidateRect(g_hWnd, NULL, FALSE);
                     UpdateWindow(g_hWnd);
-                    if (!LaunchApp(PATH_EXPLORER)) {
+                    if (!LaunchApp(PATH_EXPLORER, TRUE)) {
                         wsprintfW(g_statusMsg, L"explorer.exe not available on this ROM");
                         InvalidateRect(g_hWnd, NULL, FALSE);
                     }
@@ -590,9 +594,9 @@ static void OnTouch(int x, int y)
                     InvalidateRect(g_hWnd, NULL, FALSE);
                     UpdateWindow(g_hWnd);
                     /* Try common WinCE Bluetooth managers */
-                    if (!LaunchApp(L"\\Windows\\bthelp.exe") &&
-                        !LaunchApp(L"\\Windows\\btpan.exe") &&
-                        !LaunchApp(L"\\ResidentFlash\\Bluetooth\\BlueTooth.exe")) {
+                    if (!LaunchApp(L"\\Windows\\bthelp.exe", TRUE) &&
+                        !LaunchApp(L"\\Windows\\btpan.exe", TRUE) &&
+                        !LaunchApp(L"\\ResidentFlash\\Bluetooth\\BlueTooth.exe", TRUE)) {
                         wsprintfW(g_statusMsg, L"BT app path pending system scan");
                         InvalidateRect(g_hWnd, NULL, FALSE);
                     }
@@ -652,9 +656,9 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
                     InvalidateRect(hWnd, NULL, FALSE);
                     UpdateWindow(hWnd);
                     /* Execute preferred */
-                    if (g_pref == AUTOLAUNCH_TERMINAL) LaunchApp(PATH_TERMINAL);
-                    else if (g_pref == AUTOLAUNCH_GPS) LaunchApp(PATH_GPS);
-                    else if (g_pref == AUTOLAUNCH_PROBE) LaunchApp(PATH_PROBE);
+                    if (g_pref == AUTOLAUNCH_TERMINAL) LaunchApp(PATH_TERMINAL, TRUE);
+                    else if (g_pref == AUTOLAUNCH_GPS) LaunchApp(PATH_GPS, TRUE);
+                    else if (g_pref == AUTOLAUNCH_PROBE) LaunchApp(PATH_PROBE, TRUE);
                 }
             }
             InvalidateRect(hWnd, NULL, FALSE);
@@ -707,7 +711,7 @@ int WINAPI WinMain(
     }
 
     g_hWnd = CreateWindowExW(
-        WS_EX_TOPMOST,
+        0,
         L"MeroShellWndClass",
         L"Mero Shell",
         WS_VISIBLE | WS_POPUP,
