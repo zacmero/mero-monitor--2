@@ -9,12 +9,12 @@ This document records all confirmed hardware, firmware, and peripheral specifica
 | Property | Value / Specification | Notes |
 | :--- | :--- | :--- |
 | **Device Model** | Foston FS-460BT | Generic PNA / WinCE GPS class |
-| **Operating System** | Microsoft Windows CE (PE32 ARMv4) | Vendor BSP & drivers preserved |
+| **Operating System** | Microsoft Windows CE 5.0 (Build 1400) | Verified via `mero-probe` on hardware |
 | **Processor Architecture** | ARMv4 / ARMv4I | 32-bit Little-Endian PE32 binaries |
-| **Display Resolution** | 480 × 272 pixels | Landscape orientation |
-| **Touchscreen** | Resistive single-touch | Standard WinCE touch driver |
-| **Color Depth / Pixel Format** | 16-bit RGB565 | Confirmed via native Sygic configuration |
-| **RAM** | 64 MB | Reported by device system information |
+| **Display Resolution** | 480 × 272 pixels | Verified 16 bpp RGB565 |
+| **Touchscreen** | Resistive single-touch | Verified responsive via `mero-probe` |
+| **Color Depth / Pixel Format** | 16-bit RGB565 | Confirmed via hardware probe & Sygic config |
+| **RAM** | 53 MB usable (64 MB physical) | ~38 MB free at baseline (28% load) |
 | **Internal Flash / ROM** | 128 MB | Reported by device system information |
 | **External Storage** | 8 GB SD / MicroSD card | Mounted in WinCE as `\SDMMC` |
 

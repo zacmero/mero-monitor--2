@@ -1,0 +1,19 @@
+=== MERO PROBE v0.1.0 ===
+Platform: Foston FS-460BT class / Windows CE
+TickCount: 55382 ms
+
+[OS Version]
+Version: 5.0 (Build 1400)
+Extra: 
+
+[Display]
+Resolution: 480 x 272
+Color Depth: 16 bpp
+
+[Memory]
+Total Physical: 53 MB
+Avail Physical: 38 MB
+Memory Load: 28%
+
+Status: OK
+========================
