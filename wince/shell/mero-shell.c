@@ -6,21 +6,24 @@
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <mmsystem.h>
 #include <tchar.h>
 #include <stdio.h>
 #include <string.h>
 
-#define SHELL_VERSION       L"0.1.0"
+#define SHELL_VERSION       L"0.2.0"
 #define TIMER_ID_TICK       1
-#define TIMER_ID_COUNTDOWN  2
 
 #define CFG_DIR             L"\\SDMMC\\MERO"
 #define CFG_FILE            L"\\SDMMC\\MERO\\shell.cfg"
+#define DUMP_FILE           L"\\SDMMC\\MERO\\system_dump.txt"
 
 #define PATH_TERMINAL       L"\\SDMMC\\MERO\\mero-terminal.exe"
 #define PATH_PROBE          L"\\SDMMC\\MERO\\mero-probe.exe"
 #define PATH_GPS            L"\\SDMMC\\MERO\\mero-gps.exe"
 #define PATH_IGO8           L"\\SDMMC\\IGO8\\iGO8.exe"
+#define PATH_CONTROL        L"\\Windows\\control.exe"
+#define PATH_EXPLORER       L"\\Windows\\explorer.exe"
 
 typedef enum {
     AUTOLAUNCH_NONE = 0,
@@ -39,8 +42,8 @@ static const WCHAR *g_prefNames[] = {
 
 typedef struct {
     RECT rc;
-    const WCHAR *title;
-    const WCHAR *sub;
+    WCHAR title[48];
+    WCHAR sub[64];
     COLORREF color;
 } ShellButton;
 
@@ -49,17 +52,33 @@ static HWND           g_hWnd = NULL;
 static int            g_screenW = 480;
 static int            g_screenH = 272;
 
+static int            g_currentPage = 0; /* 0 = Mero Apps, 1 = System Tools */
 static AutoLaunchPref g_pref = AUTOLAUNCH_NONE;
 static int            g_countdownSeconds = 0;
 static BOOL           g_countdownActive = FALSE;
-static WCHAR          g_statusMsg[128] = L"READY // TAP A MODULE TO LAUNCH";
+static WCHAR          g_statusMsg[160] = L"READY // TAP A MODULE TO LAUNCH";
 
 static DWORD          g_memAvailMB = 0;
 static DWORD          g_memTotalMB = 0;
 static int            g_batteryPercent = -1;
 static BOOL           g_isAC = FALSE;
+static int            g_volumeLevel = 3; /* 0=Mute, 1=25%, 2=50%, 3=75%, 4=100% */
 
-static ShellButton g_buttons[6];
+static ShellButton    g_buttons[6];
+
+/* Audio volume adjustment via standard waveOut */
+static void SetMasterVolume(int level)
+{
+    DWORD vol;
+    switch (level) {
+    case 0: vol = 0x00000000; break;
+    case 1: vol = 0x40004000; break;
+    case 2: vol = 0x80008000; break;
+    case 3: vol = 0xC000C000; break;
+    case 4: default: vol = 0xFFFFFFFF; break;
+    }
+    waveOutSetVolume(0, vol);
+}
 
 /* Read shell configuration */
 static void LoadConfig(void)
@@ -168,35 +187,139 @@ static BOOL LaunchApp(const WCHAR *path)
     return ret;
 }
 
-/* Execute preferred application */
-static void ExecutePreferredApp(void)
+/* Perform a deep hardware & system discovery scan to SD card */
+static void PerformSystemDump(void)
 {
-    const WCHAR *target = NULL;
+    HANDLE hFile;
+    DWORD bytesWritten;
+    char line[1024];
+    WIN32_FIND_DATAW wfd;
+    HANDLE hFind;
+    HKEY hKey;
 
-    switch (g_pref) {
-    case AUTOLAUNCH_TERMINAL:
-        target = PATH_TERMINAL;
-        break;
-    case AUTOLAUNCH_GPS:
-        target = PATH_GPS;
-        break;
-    case AUTOLAUNCH_PROBE:
-        target = PATH_PROBE;
-        break;
-    default:
+    CreateDirectoryW(CFG_DIR, NULL);
+    hFile = CreateFileW(
+        DUMP_FILE,
+        GENERIC_WRITE,
+        FILE_SHARE_READ,
+        NULL,
+        CREATE_ALWAYS,
+        FILE_ATTRIBUTE_NORMAL,
+        NULL
+    );
+
+    if (hFile == INVALID_HANDLE_VALUE) {
+        wsprintfW(g_statusMsg, L"ERR: Cannot write to %s", DUMP_FILE);
         return;
     }
 
-    if (!LaunchApp(target)) {
-        /* If specific app failed or not found, notify user */
-        wsprintfW(g_statusMsg, L"ERR: Cannot execute %s", target);
-        g_countdownActive = FALSE;
-        InvalidateRect(g_hWnd, NULL, FALSE);
+    #define WRITE_STR(s) do { \
+        WriteFile(hFile, (s), (DWORD)strlen(s), &bytesWritten, NULL); \
+    } while(0)
+
+    WRITE_STR("========================================\r\n");
+    WRITE_STR("   MERO MONITOR #2: SYSTEM DISCOVERY    \r\n");
+    WRITE_STR("========================================\r\n\r\n");
+
+    /* 1. Root Storage Scan */
+    WRITE_STR("[ROOT DIRECTORIES & STORAGE VOLUMES]\r\n");
+    hFind = FindFirstFileW(L"\\*.*", &wfd);
+    if (hFind != INVALID_HANDLE_VALUE) {
+        do {
+            if (wfd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+                snprintf(line, sizeof(line), "DIR: \\%ls\r\n", wfd.cFileName);
+                WRITE_STR(line);
+            }
+        } while (FindNextFileW(hFind, &wfd));
+        FindClose(hFind);
     }
+    WRITE_STR("\r\n");
+
+    /* 2. Registry HKLM\\init (The Boot sequence) */
+    WRITE_STR("[REGISTRY: HKEY_LOCAL_MACHINE\\init (Startup Launch Sequence)]\r\n");
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"init", 0, 0, &hKey) == ERROR_SUCCESS) {
+        DWORD index = 0;
+        WCHAR valName[128];
+        BYTE  data[256];
+        DWORD valLen, dataLen, type;
+
+        while (1) {
+            valLen = sizeof(valName) / sizeof(valName[0]);
+            dataLen = sizeof(data);
+            if (RegEnumValueW(hKey, index++, valName, &valLen, NULL, &type, data, &dataLen) != ERROR_SUCCESS) {
+                break;
+            }
+            if (type == REG_SZ) {
+                snprintf(line, sizeof(line), "  %ls = \"%ls\"\r\n", valName, (WCHAR*)data);
+                WRITE_STR(line);
+            } else if (type == REG_DWORD) {
+                snprintf(line, sizeof(line), "  %ls = 0x%08lX\r\n", valName, *(DWORD*)data);
+                WRITE_STR(line);
+            }
+        }
+        RegCloseKey(hKey);
+    } else {
+        WRITE_STR("  [!] Failed to open HKLM\\init\r\n");
+    }
+    WRITE_STR("\r\n");
+
+    /* 3. Registry HKLM\\Drivers\\BuiltIn (Hardware Peripherals) */
+    WRITE_STR("[REGISTRY: HKEY_LOCAL_MACHINE\\Drivers\\BuiltIn (Hardware Subsystems)]\r\n");
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"Drivers\\BuiltIn", 0, 0, &hKey) == ERROR_SUCCESS) {
+        DWORD index = 0;
+        WCHAR subKeyName[128];
+        DWORD subLen;
+
+        while (1) {
+            subLen = sizeof(subKeyName) / sizeof(subKeyName[0]);
+            if (RegEnumKeyExW(hKey, index++, subKeyName, &subLen, NULL, NULL, NULL, NULL) != ERROR_SUCCESS) {
+                break;
+            }
+            snprintf(line, sizeof(line), "  DRIVER: %ls\r\n", subKeyName);
+            WRITE_STR(line);
+        }
+        RegCloseKey(hKey);
+    }
+    WRITE_STR("\r\n");
+
+    /* 4. Scan \\ResidentFlash for vendor apps, inis, bmps */
+    WRITE_STR("[FILES IN \\ResidentFlash (Internal Storage)]\r\n");
+    hFind = FindFirstFileW(L"\\ResidentFlash\\*.*", &wfd);
+    if (hFind != INVALID_HANDLE_VALUE) {
+        do {
+            snprintf(line, sizeof(line), "  \\ResidentFlash\\%ls %s\r\n",
+                     wfd.cFileName,
+                     (wfd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? "<DIR>" : "");
+            WRITE_STR(line);
+        } while (FindNextFileW(hFind, &wfd));
+        FindClose(hFind);
+    } else {
+        WRITE_STR("  (No \\ResidentFlash volume found or empty)\r\n");
+    }
+    WRITE_STR("\r\n");
+
+    /* 5. Scan \\Windows for Executables */
+    WRITE_STR("[KEY EXECUTABLES IN \\Windows]\r\n");
+    hFind = FindFirstFileW(L"\\Windows\\*.exe", &wfd);
+    if (hFind != INVALID_HANDLE_VALUE) {
+        int count = 0;
+        do {
+            snprintf(line, sizeof(line), "%ls%s", wfd.cFileName, (++count % 4 == 0) ? "\r\n" : "  |  ");
+            WRITE_STR(line);
+        } while (FindNextFileW(hFind, &wfd));
+        FindClose(hFind);
+        WRITE_STR("\r\n");
+    }
+    WRITE_STR("\r\n=== END OF DISCOVERY DUMP ===\r\n");
+
+    #undef WRITE_STR
+
+    CloseHandle(hFile);
+    wsprintfW(g_statusMsg, L"SUCCESS // Dump written to \\SDMMC\\MERO\\system_dump.txt");
 }
 
-/* Layout button geometry */
-static void InitButtons(void)
+/* Update button text & colors based on current page */
+static void UpdateButtons(void)
 {
     int colW = 215;
     int rowH = 46;
@@ -206,42 +329,70 @@ static void InitButtons(void)
     int spacing = 8;
 
     /* Left column */
-    /* Button 0: Thought Terminal */
     SetRect(&g_buttons[0].rc, xLeft, y0, xLeft + colW, y0 + rowH);
-    g_buttons[0].title = L"[1] THOUGHT TERMINAL";
-    g_buttons[0].sub   = L"Mero Mind / Artifact Stream";
-    g_buttons[0].color = RGB(0, 255, 128);
-
-    /* Button 1: GPS Monitor */
     SetRect(&g_buttons[1].rc, xLeft, y0 + (rowH + spacing), xLeft + colW, y0 + (rowH + spacing) + rowH);
-    g_buttons[1].title = L"[2] GPS SENSOR";
-    g_buttons[1].sub   = L"COM1: 9600 Baud NMEA Stream";
-    g_buttons[1].color = RGB(0, 220, 255);
-
-    /* Button 2: Hardware Probe */
     SetRect(&g_buttons[2].rc, xLeft, y0 + (rowH + spacing)*2, xLeft + colW, y0 + (rowH + spacing)*2 + rowH);
-    g_buttons[2].title = L"[3] SYSTEM PROBE";
-    g_buttons[2].sub   = L"Hardware & Screen Diagnostics";
-    g_buttons[2].color = RGB(255, 180, 0);
 
     /* Right column */
-    /* Button 3: Boot Preference */
     SetRect(&g_buttons[3].rc, xRight, y0, xRight + colW, y0 + rowH);
-    g_buttons[3].title = L"[4] DEFAULT APP";
-    g_buttons[3].sub   = g_prefNames[g_pref];
-    g_buttons[3].color = RGB(180, 140, 255);
-
-    /* Button 4: Vendor Navigation */
     SetRect(&g_buttons[4].rc, xRight, y0 + (rowH + spacing), xRight + colW, y0 + (rowH + spacing) + rowH);
-    g_buttons[4].title = L"[5] FACTORY IGO8";
-    g_buttons[4].sub   = L"Original Navigation System";
-    g_buttons[4].color = RGB(140, 180, 160);
-
-    /* Button 5: Exit to WinCE */
     SetRect(&g_buttons[5].rc, xRight, y0 + (rowH + spacing)*2, xRight + colW, y0 + (rowH + spacing)*2 + rowH);
-    g_buttons[5].title = L"[6] EXIT TO WINCE";
-    g_buttons[5].sub   = L"Return to Device Desktop";
-    g_buttons[5].color = RGB(255, 80, 80);
+
+    if (g_currentPage == 0) {
+        /* PAGE 0: Mero Applications */
+        lstrcpyW(g_buttons[0].title, L"[1] THOUGHT TERMINAL");
+        lstrcpyW(g_buttons[0].sub,   L"Mero Mind / Artifact Stream");
+        g_buttons[0].color = RGB(0, 255, 128);
+
+        lstrcpyW(g_buttons[1].title, L"[2] GPS SENSOR");
+        lstrcpyW(g_buttons[1].sub,   L"COM1: 9600 Baud NMEA Stream");
+        g_buttons[1].color = RGB(0, 220, 255);
+
+        lstrcpyW(g_buttons[2].title, L"[3] SYSTEM PROBE");
+        lstrcpyW(g_buttons[2].sub,   L"Hardware & Screen Diagnostics");
+        g_buttons[2].color = RGB(255, 180, 0);
+
+        lstrcpyW(g_buttons[3].title, L"[4] DEFAULT BOOT APP");
+        lstrcpyW(g_buttons[3].sub,   g_prefNames[g_pref]);
+        g_buttons[3].color = RGB(180, 140, 255);
+
+        lstrcpyW(g_buttons[4].title, L"[5] SYSTEM TOOLS >>");
+        lstrcpyW(g_buttons[4].sub,   L"Explorer, Volume, Discovery Dump");
+        g_buttons[4].color = RGB(120, 200, 255);
+
+        lstrcpyW(g_buttons[5].title, L"[6] EXIT TO WINCE");
+        lstrcpyW(g_buttons[5].sub,   L"Return to Device Desktop");
+        g_buttons[5].color = RGB(255, 80, 80);
+    } else {
+        /* PAGE 1: System Tools & Hardware Options */
+        lstrcpyW(g_buttons[0].title, L"[1] CONTROL PANEL");
+        lstrcpyW(g_buttons[0].sub,   L"Launch Windows CE Control Panel");
+        g_buttons[0].color = RGB(0, 220, 255);
+
+        lstrcpyW(g_buttons[1].title, L"[2] WINCE EXPLORER");
+        lstrcpyW(g_buttons[1].sub,   L"Browse ResidentFlash & Files");
+        g_buttons[1].color = RGB(0, 255, 128);
+
+        lstrcpyW(g_buttons[2].title, L"[3] BLUETOOTH TOOL");
+        lstrcpyW(g_buttons[2].sub,   L"Launch Bluetooth Manager");
+        g_buttons[2].color = RGB(100, 180, 255);
+
+        {
+            WCHAR volBuf[32];
+            wsprintfW(volBuf, L"Master Level: %d%%", g_volumeLevel * 25);
+            lstrcpyW(g_buttons[3].title, L"[4] VOLUME TOGGLE");
+            lstrcpyW(g_buttons[3].sub, volBuf);
+            g_buttons[3].color = RGB(255, 200, 40);
+        }
+
+        lstrcpyW(g_buttons[4].title, L"[5] DUMP SYSTEM ARCH");
+        lstrcpyW(g_buttons[4].sub,   L"Export HKLM\\init & Files to SD");
+        g_buttons[4].color = RGB(255, 120, 180);
+
+        lstrcpyW(g_buttons[5].title, L"[6] << BACK TO MAIN");
+        lstrcpyW(g_buttons[5].sub,   L"Return to Mero Applications");
+        g_buttons[5].color = RGB(160, 160, 160);
+    }
 }
 
 /* Paint Custom Mero Shell */
@@ -262,7 +413,9 @@ static void OnPaint(HWND hWnd)
 
     /* TOP STATUS BAR */
     SetTextColor(hdc, RGB(0, 255, 128));
-    wsprintfW(buf, L"MERO // OS SHELL [v%s]", SHELL_VERSION);
+    wsprintfW(buf, L"MERO // %s [v%s]",
+              g_currentPage == 0 ? L"OS SHELL" : L"SYSTEM TOOLS",
+              SHELL_VERSION);
     ExtTextOutW(hdc, 18, 8, 0, NULL, buf, lstrlenW(buf), NULL);
 
     /* Power / Battery */
@@ -290,8 +443,7 @@ static void OnPaint(HWND hWnd)
         DeleteObject(hPen);
     }
 
-    /* Update button subtitle for preference */
-    g_buttons[3].sub = g_prefNames[g_pref];
+    UpdateButtons();
 
     /* DRAW APPLICATION BUTTONS */
     for (i = 0; i < 6; i++) {
@@ -339,7 +491,7 @@ static void OnPaint(HWND hWnd)
 
     /* Footer Hint */
     SetTextColor(hdc, RGB(90, 120, 100));
-    wsprintfW(buf, L"Foston FS-460BT // WinCE 5.0 Core // SDMMC: Active");
+    wsprintfW(buf, L"Foston FS-460BT // WinCE 5.0 Core // SDMMC: Active // Page %d/2", g_currentPage + 1);
     ExtTextOutW(hdc, 18, 234, 0, NULL, buf, lstrlenW(buf), NULL);
 
     EndPaint(hWnd, &ps);
@@ -360,57 +512,113 @@ static void OnTouch(int x, int y)
 
     for (i = 0; i < 6; i++) {
         if (PtInRect(&g_buttons[i].rc, (POINT){ x, y })) {
-            switch (i) {
-            case 0: /* Thought Terminal */
-                wsprintfW(g_statusMsg, L"Launching Thought Terminal...");
-                InvalidateRect(g_hWnd, NULL, FALSE);
-                UpdateWindow(g_hWnd);
-                if (!LaunchApp(PATH_TERMINAL)) {
-                    wsprintfW(g_statusMsg, L"Terminal binary pending: %s", PATH_TERMINAL);
+            if (g_currentPage == 0) {
+                /* PAGE 0 ACTIONS */
+                switch (i) {
+                case 0: /* Thought Terminal */
+                    wsprintfW(g_statusMsg, L"Launching Thought Terminal...");
                     InvalidateRect(g_hWnd, NULL, FALSE);
-                }
-                break;
+                    UpdateWindow(g_hWnd);
+                    if (!LaunchApp(PATH_TERMINAL)) {
+                        wsprintfW(g_statusMsg, L"Terminal binary pending: %s", PATH_TERMINAL);
+                        InvalidateRect(g_hWnd, NULL, FALSE);
+                    }
+                    break;
 
-            case 1: /* GPS Monitor */
-                wsprintfW(g_statusMsg, L"Launching GPS Monitor...");
-                InvalidateRect(g_hWnd, NULL, FALSE);
-                UpdateWindow(g_hWnd);
-                if (!LaunchApp(PATH_GPS)) {
-                    wsprintfW(g_statusMsg, L"GPS monitor binary pending: %s", PATH_GPS);
+                case 1: /* GPS Monitor */
+                    wsprintfW(g_statusMsg, L"Launching GPS Monitor...");
                     InvalidateRect(g_hWnd, NULL, FALSE);
-                }
-                break;
+                    UpdateWindow(g_hWnd);
+                    if (!LaunchApp(PATH_GPS)) {
+                        wsprintfW(g_statusMsg, L"GPS monitor binary pending: %s", PATH_GPS);
+                        InvalidateRect(g_hWnd, NULL, FALSE);
+                    }
+                    break;
 
-            case 2: /* System Probe */
-                wsprintfW(g_statusMsg, L"Launching Hardware Probe...");
-                InvalidateRect(g_hWnd, NULL, FALSE);
-                UpdateWindow(g_hWnd);
-                if (!LaunchApp(PATH_PROBE)) {
-                    wsprintfW(g_statusMsg, L"Probe not found at: %s", PATH_PROBE);
+                case 2: /* System Probe */
+                    wsprintfW(g_statusMsg, L"Launching Hardware Probe...");
                     InvalidateRect(g_hWnd, NULL, FALSE);
-                }
-                break;
+                    UpdateWindow(g_hWnd);
+                    if (!LaunchApp(PATH_PROBE)) {
+                        wsprintfW(g_statusMsg, L"Probe not found: %s", PATH_PROBE);
+                        InvalidateRect(g_hWnd, NULL, FALSE);
+                    }
+                    break;
 
-            case 3: /* Cycle Boot Preference */
-                g_pref = (AutoLaunchPref)((g_pref + 1) % AUTOLAUNCH_COUNT);
-                SaveConfig();
-                wsprintfW(g_statusMsg, L"Default launch set to: %s", g_prefNames[g_pref]);
-                InvalidateRect(g_hWnd, NULL, FALSE);
-                break;
-
-            case 4: /* Vendor Navigation */
-                wsprintfW(g_statusMsg, L"Launching original iGO8...");
-                InvalidateRect(g_hWnd, NULL, FALSE);
-                UpdateWindow(g_hWnd);
-                if (!LaunchApp(PATH_IGO8)) {
-                    wsprintfW(g_statusMsg, L"Original iGO8 not found at: %s", PATH_IGO8);
+                case 3: /* Cycle Boot Preference */
+                    g_pref = (AutoLaunchPref)((g_pref + 1) % AUTOLAUNCH_COUNT);
+                    SaveConfig();
+                    wsprintfW(g_statusMsg, L"Default launch set to: %s", g_prefNames[g_pref]);
                     InvalidateRect(g_hWnd, NULL, FALSE);
-                }
-                break;
+                    break;
 
-            case 5: /* Exit to WinCE */
-                DestroyWindow(g_hWnd);
-                break;
+                case 4: /* Switch to Page 1 (System Tools) */
+                    g_currentPage = 1;
+                    wsprintfW(g_statusMsg, L"System Tools: Explorer, Control Panel, Architecture Dump");
+                    InvalidateRect(g_hWnd, NULL, FALSE);
+                    break;
+
+                case 5: /* Exit to WinCE */
+                    DestroyWindow(g_hWnd);
+                    break;
+                }
+            } else {
+                /* PAGE 1 ACTIONS */
+                switch (i) {
+                case 0: /* Control Panel */
+                    wsprintfW(g_statusMsg, L"Launching Windows Control Panel...");
+                    InvalidateRect(g_hWnd, NULL, FALSE);
+                    UpdateWindow(g_hWnd);
+                    if (!LaunchApp(PATH_CONTROL)) {
+                        wsprintfW(g_statusMsg, L"control.exe not available on this ROM");
+                        InvalidateRect(g_hWnd, NULL, FALSE);
+                    }
+                    break;
+
+                case 1: /* Explorer */
+                    wsprintfW(g_statusMsg, L"Launching Windows Explorer...");
+                    InvalidateRect(g_hWnd, NULL, FALSE);
+                    UpdateWindow(g_hWnd);
+                    if (!LaunchApp(PATH_EXPLORER)) {
+                        wsprintfW(g_statusMsg, L"explorer.exe not available on this ROM");
+                        InvalidateRect(g_hWnd, NULL, FALSE);
+                    }
+                    break;
+
+                case 2: /* Bluetooth Manager */
+                    wsprintfW(g_statusMsg, L"Searching for Bluetooth utility...");
+                    InvalidateRect(g_hWnd, NULL, FALSE);
+                    UpdateWindow(g_hWnd);
+                    /* Try common WinCE Bluetooth managers */
+                    if (!LaunchApp(L"\\Windows\\bthelp.exe") &&
+                        !LaunchApp(L"\\Windows\\btpan.exe") &&
+                        !LaunchApp(L"\\ResidentFlash\\Bluetooth\\BlueTooth.exe")) {
+                        wsprintfW(g_statusMsg, L"BT app path pending system scan");
+                        InvalidateRect(g_hWnd, NULL, FALSE);
+                    }
+                    break;
+
+                case 3: /* Volume Toggle */
+                    g_volumeLevel = (g_volumeLevel + 1) % 5;
+                    SetMasterVolume(g_volumeLevel);
+                    wsprintfW(g_statusMsg, L"Master audio volume set to %d%%", g_volumeLevel * 25);
+                    InvalidateRect(g_hWnd, NULL, FALSE);
+                    break;
+
+                case 4: /* Perform System Discovery Dump */
+                    wsprintfW(g_statusMsg, L"Scanning system architecture & dumping...");
+                    InvalidateRect(g_hWnd, NULL, FALSE);
+                    UpdateWindow(g_hWnd);
+                    PerformSystemDump();
+                    InvalidateRect(g_hWnd, NULL, FALSE);
+                    break;
+
+                case 5: /* Back to Page 0 */
+                    g_currentPage = 0;
+                    wsprintfW(g_statusMsg, L"Mero Applications ready");
+                    InvalidateRect(g_hWnd, NULL, FALSE);
+                    break;
+                }
             }
             return;
         }
@@ -423,7 +631,8 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
     switch (uMsg) {
     case WM_CREATE:
         UpdateSystemStatus();
-        InitButtons();
+        SetMasterVolume(g_volumeLevel);
+        UpdateButtons();
         LoadConfig();
         SetTimer(hWnd, TIMER_ID_TICK, 1000, NULL);
         return 0;
@@ -442,7 +651,10 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
                     wsprintfW(g_statusMsg, L"Auto-launching %s...", g_prefNames[g_pref]);
                     InvalidateRect(hWnd, NULL, FALSE);
                     UpdateWindow(hWnd);
-                    ExecutePreferredApp();
+                    /* Execute preferred */
+                    if (g_pref == AUTOLAUNCH_TERMINAL) LaunchApp(PATH_TERMINAL);
+                    else if (g_pref == AUTOLAUNCH_GPS) LaunchApp(PATH_GPS);
+                    else if (g_pref == AUTOLAUNCH_PROBE) LaunchApp(PATH_PROBE);
                 }
             }
             InvalidateRect(hWnd, NULL, FALSE);
