@@ -29,6 +29,7 @@ extern BOOL WINAPI SetCleanRebootFlag(void);
 
 #define PATH_GALLERY        L"\\SDMMC\\MERO\\mero-gallery.exe"
 #define PATH_MEDIA_CTRL     L"\\SDMMC\\MERO\\mero-media-ctrl.exe"
+#define PATH_TUNER          L"\\SDMMC\\MERO\\mero-tuner.exe"
 #define PATH_CAM            L"\\SDMMC\\MERO\\mero-cam.exe"
 #define PATH_VIS            L"\\SDMMC\\MERO\\mero-vis.exe"
 #define PATH_TERMINAL       L"\\SDMMC\\MERO\\mero-terminal.exe"
@@ -281,23 +282,33 @@ static int KillVendorWatchdog(void)
 }
 
 /* Create desktop shortcut (.lnk) files on Windows CE desktop */
+/* Create desktop shortcut (.lnk) files on Windows CE desktop */
 static void CreateDesktopShortcuts(void)
 {
     HANDLE hFile;
     DWORD written;
-    const char *lnkShell = "34#\\ResidentFlash\\MERO\\mero-flash.exe";
-    const char *lnkCmd   = "32#\\ResidentFlash\\MERO\\mero-cmd.exe";
-    const char *lnkFlash = "34#\\ResidentFlash\\MERO\\mero-flash.exe";
+    const char *lnkShell   = "34#\\ResidentFlash\\MERO\\mero-flash.exe";
+    const char *lnkCmd     = "32#\\ResidentFlash\\MERO\\mero-cmd.exe";
+    const char *lnkGallery = "36#\\ResidentFlash\\MERO\\mero-gallery.exe";
+    const char *lnkTuner   = "34#\\ResidentFlash\\MERO\\mero-tuner.exe";
+    const char *lnkMedia   = "39#\\ResidentFlash\\MERO\\mero-media-ctrl.exe";
 
     CreateDirectoryW(L"\\ResidentFlash\\MERO", NULL);
     CopyFileW(L"\\SDMMC\\MERO\\mero-shell.exe", L"\\ResidentFlash\\MERO\\mero-shell.exe", FALSE);
     CopyFileW(L"\\SDMMC\\MERO\\mero-cmd.exe", L"\\ResidentFlash\\MERO\\mero-cmd.exe", FALSE);
+    CopyFileW(L"\\SDMMC\\MERO\\mero-gallery.exe", L"\\ResidentFlash\\MERO\\mero-gallery.exe", FALSE);
+    CopyFileW(L"\\SDMMC\\MERO\\mero-tuner.exe", L"\\ResidentFlash\\MERO\\mero-tuner.exe", FALSE);
+    CopyFileW(L"\\SDMMC\\MERO\\mero-media-ctrl.exe", L"\\ResidentFlash\\MERO\\mero-media-ctrl.exe", FALSE);
     CopyFileW(L"\\SDMMC\\MERO\\mero-flash.exe", L"\\ResidentFlash\\MERO\\mero-flash.exe", FALSE);
     CopyFileW(L"\\SDMMC\\MERO\\mero-shell.ico", L"\\ResidentFlash\\MERO\\mero-shell.ico", FALSE);
     CopyFileW(L"\\SDMMC\\MERO\\mero-cmd.ico", L"\\ResidentFlash\\MERO\\mero-cmd.ico", FALSE);
+    CopyFileW(L"\\SDMMC\\MERO\\mero-gallery.ico", L"\\ResidentFlash\\MERO\\mero-gallery.ico", FALSE);
     CopyFileW(L"\\SDMMC\\MERO\\mero-flash.ico", L"\\ResidentFlash\\MERO\\mero-flash.ico", FALSE);
 
     CreateDirectoryW(L"\\Windows\\Desktop", NULL);
+
+    /* Remove obsolete confusing duplicate Resident Shell shortcut */
+    DeleteFileW(L"\\Windows\\Desktop\\Resident Shell.lnk");
 
     hFile = CreateFileW(L"\\Windows\\Desktop\\Mero Shell.lnk", GENERIC_WRITE, FILE_SHARE_READ,
                         NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -313,10 +324,24 @@ static void CreateDesktopShortcuts(void)
         CloseHandle(hFile);
     }
 
-    hFile = CreateFileW(L"\\Windows\\Desktop\\Resident Shell.lnk", GENERIC_WRITE, FILE_SHARE_READ,
+    hFile = CreateFileW(L"\\Windows\\Desktop\\Media Visualizer.lnk", GENERIC_WRITE, FILE_SHARE_READ,
                         NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile != INVALID_HANDLE_VALUE) {
-        WriteFile(hFile, lnkFlash, (DWORD)strlen(lnkFlash), &written, NULL);
+        WriteFile(hFile, lnkGallery, (DWORD)strlen(lnkGallery), &written, NULL);
+        CloseHandle(hFile);
+    }
+
+    hFile = CreateFileW(L"\\Windows\\Desktop\\Display Tuner.lnk", GENERIC_WRITE, FILE_SHARE_READ,
+                        NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile != INVALID_HANDLE_VALUE) {
+        WriteFile(hFile, lnkTuner, (DWORD)strlen(lnkTuner), &written, NULL);
+        CloseHandle(hFile);
+    }
+
+    hFile = CreateFileW(L"\\Windows\\Desktop\\YT Music Deck.lnk", GENERIC_WRITE, FILE_SHARE_READ,
+                        NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile != INVALID_HANDLE_VALUE) {
+        WriteFile(hFile, lnkMedia, (DWORD)strlen(lnkMedia), &written, NULL);
         CloseHandle(hFile);
     }
 }
@@ -864,13 +889,9 @@ static void UpdateButtons(void)
         lstrcpyW(g_buttons[2].sub,   L"Original Factory Navigation UI");
         g_buttons[2].color = RGB(255, 200, 40);
 
-        {
-            WCHAR volBuf[32];
-            wsprintfW(volBuf, L"Master Level: %d%%", g_volumeLevel * 25);
-            lstrcpyW(g_buttons[3].title, L"[4] VOLUME TOGGLE");
-            lstrcpyW(g_buttons[3].sub, volBuf);
-            g_buttons[3].color = RGB(180, 140, 255);
-        }
+        lstrcpyW(g_buttons[3].title, L"[4] DISPLAY TUNER");
+        lstrcpyW(g_buttons[3].sub,   L"Contrast, Brightness, Gamma");
+        g_buttons[3].color = RGB(255, 140, 40);
 
         lstrcpyW(g_buttons[4].title, L"[5] ADVANCED TOOLS >>");
         lstrcpyW(g_buttons[4].sub,   L"Watchdog, Hardware Dump, Reset");
@@ -896,9 +917,13 @@ static void UpdateButtons(void)
         lstrcpyW(g_buttons[2].sub,   L"Standard Windows CE Shell");
         g_buttons[2].color = RGB(255, 180, 0);
 
-        lstrcpyW(g_buttons[3].title, L"[4] CONTROL PANEL");
-        lstrcpyW(g_buttons[3].sub,   L"Windows CE System Settings");
-        g_buttons[3].color = RGB(180, 140, 255);
+        {
+            WCHAR volBuf[32];
+            wsprintfW(volBuf, L"Master Level: %d%%", g_volumeLevel * 25);
+            lstrcpyW(g_buttons[3].title, L"[4] VOLUME TOGGLE");
+            lstrcpyW(g_buttons[3].sub, volBuf);
+            g_buttons[3].color = RGB(180, 140, 255);
+        }
 
         lstrcpyW(g_buttons[4].title, L"[5] REBOOT DEVICE");
         lstrcpyW(g_buttons[4].sub,   L"Cold Hardware Reset (IOCTL)");
@@ -1182,16 +1207,19 @@ static void OnTouch(int x, int y)
                     LaunchVendorUI();
                     break;
 
-                case 3: /* Volume Toggle */
-                    g_volumeLevel = (g_volumeLevel + 1) % 5;
-                    SetMasterVolume(g_volumeLevel);
-                    wsprintfW(g_statusMsg, L"Master audio volume set to %d%%", g_volumeLevel * 25);
+                case 3: /* Display & Color Tuner */
+                    wsprintfW(g_statusMsg, L"Launching Display & Color Tuner...");
                     InvalidateRect(g_hWnd, NULL, FALSE);
+                    UpdateWindow(g_hWnd);
+                    if (!LaunchApp(PATH_TUNER, TRUE)) {
+                        wsprintfW(g_statusMsg, L"Display Tuner not found: %s", PATH_TUNER);
+                        InvalidateRect(g_hWnd, NULL, FALSE);
+                    }
                     break;
 
                 case 4: /* Switch to Advanced Tools */
                     g_currentPage = PAGE_ADVANCED;
-                    wsprintfW(g_statusMsg, L"Advanced Tools: Watchdog, Hardware Dump, Explorer, Control Panel");
+                    wsprintfW(g_statusMsg, L"Advanced Tools: Watchdog, Hardware Dump, Explorer, Volume");
                     InvalidateRect(g_hWnd, NULL, FALSE);
                     break;
 
@@ -1232,14 +1260,11 @@ static void OnTouch(int x, int y)
                     }
                     break;
 
-                case 3: /* Control Panel */
-                    wsprintfW(g_statusMsg, L"Launching Windows CE Control Panel...");
+                case 3: /* Volume Toggle */
+                    g_volumeLevel = (g_volumeLevel + 1) % 5;
+                    SetMasterVolume(g_volumeLevel);
+                    wsprintfW(g_statusMsg, L"Master audio volume set to %d%%", g_volumeLevel * 25);
                     InvalidateRect(g_hWnd, NULL, FALSE);
-                    UpdateWindow(g_hWnd);
-                    if (!LaunchApp(PATH_CONTROL, FALSE)) {
-                        wsprintfW(g_statusMsg, L"Control Panel launch failed");
-                        InvalidateRect(g_hWnd, NULL, FALSE);
-                    }
                     break;
 
                 case 4: /* Hardware Cold Reboot */
@@ -1287,6 +1312,9 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
                 CopyFileW(L"\\SDMMC\\MERO\\mero-shell.exe", L"\\ResidentFlash\\MERO\\mero-shell.exe", FALSE);
                 CopyFileW(L"\\SDMMC\\MERO\\mero-cmd.exe", L"\\ResidentFlash\\MERO\\mero-cmd.exe", FALSE);
                 CopyFileW(L"\\SDMMC\\MERO\\mero-gallery.exe", L"\\ResidentFlash\\MERO\\mero-gallery.exe", FALSE);
+                CopyFileW(L"\\SDMMC\\MERO\\mero-tuner.exe", L"\\ResidentFlash\\MERO\\mero-tuner.exe", FALSE);
+                CopyFileW(L"\\SDMMC\\MERO\\mero-media-ctrl.exe", L"\\ResidentFlash\\MERO\\mero-media-ctrl.exe", FALSE);
+                CopyFileW(L"\\SDMMC\\MERO\\display.cfg", L"\\ResidentFlash\\MERO\\display.cfg", FALSE);
                 CopyFileW(L"\\SDMMC\\MERO\\mero-flash.exe", L"\\ResidentFlash\\MERO\\mero-flash.exe", FALSE);
                 CopyFileW(L"\\SDMMC\\MERO\\mero-shell.ico", L"\\ResidentFlash\\MERO\\mero-shell.ico", FALSE);
                 CopyFileW(L"\\SDMMC\\MERO\\mero-cmd.ico", L"\\ResidentFlash\\MERO\\mero-cmd.ico", FALSE);

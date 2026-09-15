@@ -21,9 +21,13 @@ int WINAPI WinMain(
     (void)nCmdShow;
 
     memset(&pi, 0, sizeof(pi));
-    /* Launch ResidentFlash shell; fallback to SDMMC if resident copy missing */
-    if (!CreateProcessW(L"\\ResidentFlash\\MERO\\mero-shell.exe", NULL, NULL, NULL, FALSE, 0, NULL, NULL, NULL, &pi)) {
-        CreateProcessW(L"\\SDMMC\\MERO\\mero-shell.exe", NULL, NULL, NULL, FALSE, 0, NULL, NULL, NULL, &pi);
+    /* Try SDMMC first (latest version), fallback to ResidentFlash */
+    if (!CreateProcessW(L"\\SDMMC\\MERO\\mero-shell.exe", NULL, NULL, NULL, FALSE, 0, NULL, NULL, NULL, &pi)) {
+        if (!CreateProcessW(L"\\ResidentFlash\\MERO\\mero-shell.exe", NULL, NULL, NULL, FALSE, 0, NULL, NULL, NULL, &pi)) {
+            MessageBoxW(NULL,
+                L"Mero Shell not found.\nIf device is in USB Mass Storage mode, dismount USB or tap USB Storage Mode.",
+                L"Mero Launcher", MB_OK | MB_ICONWARNING);
+        }
     }
     if (pi.hProcess) {
         CloseHandle(pi.hProcess);

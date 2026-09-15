@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_NO_STDIO
@@ -94,6 +95,75 @@ static RECT         g_rcBtnFit;
 static RECT         g_rcBtnOrient;
 static RECT         g_rcBtnFolder;
 static RECT         g_rcBtnExit;
+
+/* Display Calibration & Color Tuning */
+static unsigned char g_colorLut[256];
+static int           g_brightness = 0;    /* -50 to +50 */
+static int           g_contrast   = 125;  /* 50 to 200 (125 = 1.25x) */
+static int           g_saturation = 130;  /* 50 to 200 (130 = 1.30x) */
+static int           g_gamma      = 115;  /* 60 to 180 (115 = 1.15) */
+static int           g_satScale   = 332;  /* (g_saturation * 256) / 100 */
+
+static void BuildColorLut(void)
+{
+    float c = (float)g_contrast / 100.0f;
+    float gammaInv = 100.0f / (float)g_gamma;
+    int i;
+
+    for (i = 0; i < 256; i++) {
+        float val = (float)i + (float)g_brightness;
+        val = (val - 128.0f) * c + 128.0f;
+        if (val < 0.0f) val = 0.0f;
+        if (val > 255.0f) val = 255.0f;
+
+        float norm = val / 255.0f;
+        float out = powf(norm, gammaInv) * 255.0f;
+
+        int res = (int)(out + 0.5f);
+        if (res < 0) res = 0;
+        if (res > 255) res = 255;
+        g_colorLut[i] = (unsigned char)res;
+    }
+
+    g_satScale = (g_saturation * 256) / 100;
+}
+
+static void LoadDisplayConfig(void)
+{
+    HANDLE hFile;
+    DWORD bytesRead;
+    char buf[512];
+
+    g_brightness = 0;
+    g_contrast   = 125;
+    g_saturation = 130;
+    g_gamma      = 115;
+
+    hFile = CreateFileW(L"\\SDMMC\\MERO\\display.cfg", GENERIC_READ, FILE_SHARE_READ, NULL,
+                        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile == INVALID_HANDLE_VALUE) {
+        hFile = CreateFileW(L"\\ResidentFlash\\MERO\\display.cfg", GENERIC_READ, FILE_SHARE_READ, NULL,
+                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    }
+
+    if (hFile != INVALID_HANDLE_VALUE) {
+        memset(buf, 0, sizeof(buf));
+        if (ReadFile(hFile, buf, sizeof(buf) - 1, &bytesRead, NULL) && bytesRead > 0) {
+            char *line = strtok(buf, "\r\n");
+            while (line) {
+                int val = 0;
+                if (sscanf(line, "brightness=%d", &val) == 1) g_brightness = val;
+                else if (sscanf(line, "contrast=%d", &val) == 1) g_contrast = val;
+                else if (sscanf(line, "saturation=%d", &val) == 1) g_saturation = val;
+                else if (sscanf(line, "gamma=%d", &val) == 1) g_gamma = val;
+                line = strtok(NULL, "\r\n");
+            }
+        }
+        CloseHandle(hFile);
+    }
+
+    BuildColorLut();
+}
 
 /* Forward declarations */
 static void ScanActiveFolder(void);
@@ -405,8 +475,22 @@ static void LoadCurrentImage(void)
             else if (sy >= srcH) sy = srcH - 1;
 
             unsigned char *p = &pixels[(sy * srcW + sx) * 4];
-            /* Pack RGB into Win32 DIB format: 0x00RRGGBB */
-            dstRow[screenX] = ((DWORD)p[0] << 16) | ((DWORD)p[1] << 8) | (DWORD)p[2];
+            int r = g_colorLut[p[0]];
+            int g = g_colorLut[p[1]];
+            int b = g_colorLut[p[2]];
+
+            if (g_satScale != 256) {
+                int y = (77 * r + 150 * g + 29 * b) >> 8;
+                r = y + (((r - y) * g_satScale) >> 8);
+                g = y + (((g - y) * g_satScale) >> 8);
+                b = y + (((b - y) * g_satScale) >> 8);
+                if (r < 0) r = 0; else if (r > 255) r = 255;
+                if (g < 0) g = 0; else if (g > 255) g = 255;
+                if (b < 0) b = 0; else if (b > 255) b = 255;
+            }
+
+            /* Pack calibrated RGB into Win32 DIB format: 0x00RRGGBB */
+            dstRow[screenX] = ((DWORD)r << 16) | ((DWORD)g << 8) | (DWORD)b;
         }
     }
 
@@ -811,6 +895,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
             ReleaseDC(hWnd, hdc);
         }
 
+        LoadDisplayConfig();
         DiscoverFolders();
         ScanActiveFolder();
 
