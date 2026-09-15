@@ -46,8 +46,10 @@ typedef enum {
 } FitMode;
 
 typedef enum {
-    ORIENT_HORIZ = 0,  /* Landscape (0°) */
-    ORIENT_VERT  = 1   /* Portrait (90° clockwise rotation) */
+    ORIENT_0   = 0,  /* Landscape normal (0°) */
+    ORIENT_90  = 1,  /* Portrait clockwise (90°) */
+    ORIENT_180 = 2,  /* Landscape inverted (180°) */
+    ORIENT_270 = 3   /* Portrait counter-clockwise (270°) */
 } OrientMode;
 
 static HINSTANCE    g_hInstance = NULL;
@@ -79,7 +81,7 @@ static const int    g_intervalOptionCount = 6;
 static int          g_intervalOptIdx = 2; /* Default 3s */
 
 static FitMode      g_fitMode = FIT_CONTAIN;
-static OrientMode   g_orientMode = ORIENT_HORIZ;
+static OrientMode   g_orientMode = ORIENT_0;
 static BOOL         g_osdVisible = TRUE;
 static BOOL         g_folderDialogOpen = FALSE;
 
@@ -321,8 +323,8 @@ static void LoadCurrentImage(void)
     memset(g_pDIBBits, 0, g_screenW * g_screenH * sizeof(DWORD));
 
     /* Effective source dimensions taking orientation into account */
-    int effW = (g_orientMode == ORIENT_VERT) ? srcH : srcW;
-    int effH = (g_orientMode == ORIENT_VERT) ? srcW : srcH;
+    int effW = (g_orientMode == ORIENT_90 || g_orientMode == ORIENT_270) ? srcH : srcW;
+    int effH = (g_orientMode == ORIENT_90 || g_orientMode == ORIENT_270) ? srcW : srcH;
 
     int dstX = 0, dstY = 0, dstW = 0, dstH = 0;
     float cropEffX = 0.0f, cropEffY = 0.0f;
@@ -377,17 +379,24 @@ static void LoadCurrentImage(void)
             if (screenX < 0 || screenX >= g_screenW) continue;
 
             int sx, sy;
-            if (g_orientMode == ORIENT_VERT) {
-                /* 90° clockwise rotation:
-                   effX (u) maps to srcY inverted: srcY = (srcH - 1) - u
-                   effY (v) maps to srcX:          srcX = v
-                */
+            switch (g_orientMode) {
+            case ORIENT_90:  /* 90° clockwise */
                 sx = (int)v;
                 sy = srcH - 1 - (int)u;
-            } else {
-                /* 0° native orientation */
+                break;
+            case ORIENT_180: /* 180° upside down */
+                sx = srcW - 1 - (int)u;
+                sy = srcH - 1 - (int)v;
+                break;
+            case ORIENT_270: /* 270° counter-clockwise */
+                sx = srcW - 1 - (int)v;
+                sy = (int)u;
+                break;
+            case ORIENT_0:   /* 0° normal */
+            default:
                 sx = (int)u;
                 sy = (int)v;
+                break;
             }
 
             if (sx < 0) sx = 0;
@@ -457,7 +466,7 @@ static void CycleFitMode(void)
 
 static void CycleOrientMode(void)
 {
-    g_orientMode = (g_orientMode == ORIENT_HORIZ) ? ORIENT_VERT : ORIENT_HORIZ;
+    g_orientMode = (OrientMode)((g_orientMode + 1) % 4);
     LoadCurrentImage();
     ResetOsdTimer();
 }
@@ -558,12 +567,15 @@ static void OnPaint(HWND hWnd)
 
         /* Status & Folder badge */
         SetTextColor(backDC, RGB(0, 220, 255));
-        wsprintfW(buf, L"%s | %s | %s | %s",
-                  g_isPlaying ? L"[PLAY]" : L"[PAUSED]",
-                  g_fitMode == FIT_CONTAIN ? L"FIT" : L"FILL",
-                  g_orientMode == ORIENT_HORIZ ? L"0 DEG" : L"90 DEG",
-                  g_folders[g_currentFolderIdx].name);
-        ExtTextOutW(backDC, 240, 5, 0, NULL, buf, lstrlenW(buf), NULL);
+        {
+            const WCHAR *orientLabels[] = { L"0 DEG", L"90 DEG", L"180 DEG", L"270 DEG" };
+            wsprintfW(buf, L"%s | %s | %s | %s",
+                      g_isPlaying ? L"[PLAY]" : L"[PAUSED]",
+                      g_fitMode == FIT_CONTAIN ? L"FIT" : L"FILL",
+                      orientLabels[g_orientMode],
+                      g_folders[g_currentFolderIdx].name);
+        }
+        ExtTextOutW(backDC, 230, 5, 0, NULL, buf, lstrlenW(buf), NULL);
 
         /* BOTTOM HUD DOCK (Dark overlay with 8 Cybernetic Buttons) */
         RECT rcBottom = { 0, 232, g_screenW, g_screenH };
@@ -597,7 +609,10 @@ static void OnPaint(HWND hWnd)
         DRAW_BTN(g_rcBtnInterval, buf,               RGB(255, 180, 0));
 
         DRAW_BTN(g_rcBtnFit,      g_fitMode == FIT_CONTAIN ? L"FIT" : L"FILL", RGB(180, 140, 255));
-        DRAW_BTN(g_rcBtnOrient,   g_orientMode == ORIENT_HORIZ ? L"HORIZ" : L"VERT", RGB(0, 255, 200));
+        {
+            const WCHAR *orientBtnLabels[] = { L"0 DEG", L"90 DEG", L"180 DEG", L"270 DEG" };
+            DRAW_BTN(g_rcBtnOrient, orientBtnLabels[g_orientMode], RGB(0, 255, 200));
+        }
         DRAW_BTN(g_rcBtnFolder,   L"FOLDER",         RGB(212, 0, 255));
         DRAW_BTN(g_rcBtnExit,     L"EXIT",           RGB(255, 80, 80));
 

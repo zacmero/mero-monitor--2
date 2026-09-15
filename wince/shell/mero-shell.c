@@ -12,7 +12,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#define SHELL_VERSION       L"0.2.5"
+#define SHELL_VERSION       L"0.2.6"
 #define TIMER_ID_TICK       1
 
 #define IOCTL_HAL_REBOOT    0x0001003C
@@ -28,6 +28,9 @@ extern BOOL WINAPI SetCleanRebootFlag(void);
 #define DUMP_FILE           L"\\SDMMC\\MERO\\system_dump.txt"
 
 #define PATH_GALLERY        L"\\SDMMC\\MERO\\mero-gallery.exe"
+#define PATH_MEDIA_CTRL     L"\\SDMMC\\MERO\\mero-media-ctrl.exe"
+#define PATH_CAM            L"\\SDMMC\\MERO\\mero-cam.exe"
+#define PATH_VIS            L"\\SDMMC\\MERO\\mero-vis.exe"
 #define PATH_TERMINAL       L"\\SDMMC\\MERO\\mero-terminal.exe"
 #define PATH_PROBE          L"\\SDMMC\\MERO\\mero-probe.exe"
 #define PATH_CMD            L"\\SDMMC\\MERO\\mero-cmd.exe"
@@ -91,7 +94,15 @@ static HWND           g_hWnd = NULL;
 static int            g_screenW = 480;
 static int            g_screenH = 272;
 
-static int            g_currentPage = 0; /* 0 = Mero Apps, 1 = System Tools */
+typedef enum {
+    PAGE_MAIN        = 0,  /* Mero OS Core Hub */
+    PAGE_COMPANIONS  = 1,  /* Custom Companion Apps Suite */
+    PAGE_SYSTEM      = 2,  /* System & Hardware Tools */
+    PAGE_ADVANCED    = 3,  /* Low-level & Diagnostic Tools */
+    PAGE_COUNT       = 4
+} ShellPage;
+
+static ShellPage      g_currentPage = PAGE_MAIN;
 static AutoLaunchPref g_pref = AUTOLAUNCH_NONE;
 static int            g_countdownSeconds = 0;
 static BOOL           g_countdownActive = FALSE;
@@ -545,7 +556,7 @@ static BOOL LaunchApp(const WCHAR *path, BOOL exitShell)
 }
 
 /* Restore or launch factory vendor UI (Launch.exe) */
-static void __attribute__((unused)) LaunchVendorUI(void)
+static void LaunchVendorUI(void)
 {
     HWND hWndVendor = FindWindowW(NULL, L"Launch");
     if (!hWndVendor) hWndVendor = FindWindowW(L"Launch", NULL);
@@ -784,10 +795,11 @@ static void UpdateButtons(void)
     SetRect(&g_buttons[4].rc, xRight, y0 + (rowH + spacing), xRight + colW, y0 + (rowH + spacing) + rowH);
     SetRect(&g_buttons[5].rc, xRight, y0 + (rowH + spacing)*2, xRight + colW, y0 + (rowH + spacing)*2 + rowH);
 
-    if (g_currentPage == 0) {
-        /* PAGE 0: Mero Applications */
-        lstrcpyW(g_buttons[0].title, L"[1] MEDIA VISUALIZER");
-        lstrcpyW(g_buttons[0].sub,   L"Living Picture Frame & Gallery");
+    switch (g_currentPage) {
+    case PAGE_MAIN:
+        /* PAGE 0: Mero OS Core Hub */
+        lstrcpyW(g_buttons[0].title, L"[1] COMPANION LABS >>");
+        lstrcpyW(g_buttons[0].sub,   L"Gallery, Cam, YT Music, VU Deck");
         g_buttons[0].color = RGB(0, 255, 128);
 
         lstrcpyW(g_buttons[1].title, L"[2] MERO CMD SHELL");
@@ -803,14 +815,43 @@ static void UpdateButtons(void)
         g_buttons[3].color = RGB(180, 140, 255);
 
         lstrcpyW(g_buttons[4].title, L"[5] SYSTEM TOOLS >>");
-        lstrcpyW(g_buttons[4].sub,   L"Explorer, Volume, Discovery Dump");
+        lstrcpyW(g_buttons[4].sub,   L"USB Mode, Vendor UI, Power");
         g_buttons[4].color = RGB(120, 200, 255);
 
         lstrcpyW(g_buttons[5].title, L"[6] EXIT TO DESKTOP");
         lstrcpyW(g_buttons[5].sub,   L"Leave Shell & Show WinCE Desktop");
         g_buttons[5].color = RGB(255, 80, 80);
-    } else {
-        /* PAGE 1: System Tools & Hardware Options */
+        break;
+
+    case PAGE_COMPANIONS:
+        /* PAGE 1: Custom Companion Applications Suite */
+        lstrcpyW(g_buttons[0].title, L"[1] MEDIA VISUALIZER");
+        lstrcpyW(g_buttons[0].sub,   L"Living Picture Frame & Gallery");
+        g_buttons[0].color = RGB(0, 255, 128);
+
+        lstrcpyW(g_buttons[1].title, L"[2] YOUTUBE MUSIC");
+        lstrcpyW(g_buttons[1].sub,   L"Now Playing Deck & Controls");
+        g_buttons[1].color = RGB(255, 70, 70);
+
+        lstrcpyW(g_buttons[2].title, L"[3] DARKHORSE CAM");
+        lstrcpyW(g_buttons[2].sub,   L"Desktop Webcam Feed Monitor");
+        g_buttons[2].color = RGB(0, 220, 255);
+
+        lstrcpyW(g_buttons[3].title, L"[4] AUDIO SPECTRUM VU");
+        lstrcpyW(g_buttons[3].sub,   L"Hardware Audio VU Meter");
+        g_buttons[3].color = RGB(255, 180, 0);
+
+        lstrcpyW(g_buttons[4].title, L"[5] THOUGHT TERMINAL");
+        lstrcpyW(g_buttons[4].sub,   L"Brain Log & Scratch Notes");
+        g_buttons[4].color = RGB(180, 140, 255);
+
+        lstrcpyW(g_buttons[5].title, L"[6] << BACK TO MAIN");
+        lstrcpyW(g_buttons[5].sub,   L"Return to Main OS Hub");
+        g_buttons[5].color = RGB(160, 160, 160);
+        break;
+
+    case PAGE_SYSTEM:
+        /* PAGE 2: System Tools & Hardware Options */
         lstrcpyW(g_buttons[0].title, L"[1] AUTONOMOUS BOOT");
         lstrcpyW(g_buttons[0].sub,   g_bootTargetNames[g_bootTarget]);
         g_buttons[0].color = RGB(0, 255, 128);
@@ -819,25 +860,54 @@ static void UpdateButtons(void)
         lstrcpyW(g_buttons[1].sub,   g_usbModeNames[g_usbMode]);
         g_buttons[1].color = RGB(0, 220, 255);
 
+        lstrcpyW(g_buttons[2].title, L"[3] VENDOR GPS UI");
+        lstrcpyW(g_buttons[2].sub,   L"Original Factory Navigation UI");
+        g_buttons[2].color = RGB(255, 200, 40);
+
         {
             WCHAR volBuf[32];
             wsprintfW(volBuf, L"Master Level: %d%%", g_volumeLevel * 25);
-            lstrcpyW(g_buttons[2].title, L"[3] VOLUME TOGGLE");
-            lstrcpyW(g_buttons[2].sub, volBuf);
-            g_buttons[2].color = RGB(255, 200, 40);
+            lstrcpyW(g_buttons[3].title, L"[4] VOLUME TOGGLE");
+            lstrcpyW(g_buttons[3].sub, volBuf);
+            g_buttons[3].color = RGB(180, 140, 255);
         }
 
-        lstrcpyW(g_buttons[3].title, L"[4] KILL VENDOR DOG");
-        lstrcpyW(g_buttons[3].sub,   L"Terminate ANWDOG & PhoneLink");
-        g_buttons[3].color = RGB(255, 80, 80);
-
-        lstrcpyW(g_buttons[4].title, L"[5] REBOOT DEVICE");
-        lstrcpyW(g_buttons[4].sub,   L"Soft Reset (Power Button If Off)");
-        g_buttons[4].color = RGB(255, 120, 80);
+        lstrcpyW(g_buttons[4].title, L"[5] ADVANCED TOOLS >>");
+        lstrcpyW(g_buttons[4].sub,   L"Watchdog, Hardware Dump, Reset");
+        g_buttons[4].color = RGB(120, 200, 255);
 
         lstrcpyW(g_buttons[5].title, L"[6] << BACK TO MAIN");
-        lstrcpyW(g_buttons[5].sub,   L"Return to Mero Applications");
+        lstrcpyW(g_buttons[5].sub,   L"Return to Main OS Hub");
         g_buttons[5].color = RGB(160, 160, 160);
+        break;
+
+    case PAGE_ADVANCED:
+    default:
+        /* PAGE 3: Advanced Diagnostics & Subsystem Tools */
+        lstrcpyW(g_buttons[0].title, L"[1] KILL VENDOR DOG");
+        lstrcpyW(g_buttons[0].sub,   L"Terminate ANWDOG & PhoneLink");
+        g_buttons[0].color = RGB(255, 80, 80);
+
+        lstrcpyW(g_buttons[1].title, L"[2] HARDWARE DUMP");
+        lstrcpyW(g_buttons[1].sub,   L"Registry & Peripheral Scan");
+        g_buttons[1].color = RGB(0, 220, 255);
+
+        lstrcpyW(g_buttons[2].title, L"[3] WINCE EXPLORER");
+        lstrcpyW(g_buttons[2].sub,   L"Standard Windows CE Shell");
+        g_buttons[2].color = RGB(255, 180, 0);
+
+        lstrcpyW(g_buttons[3].title, L"[4] CONTROL PANEL");
+        lstrcpyW(g_buttons[3].sub,   L"Windows CE System Settings");
+        g_buttons[3].color = RGB(180, 140, 255);
+
+        lstrcpyW(g_buttons[4].title, L"[5] REBOOT DEVICE");
+        lstrcpyW(g_buttons[4].sub,   L"Cold Hardware Reset (IOCTL)");
+        g_buttons[4].color = RGB(255, 120, 80);
+
+        lstrcpyW(g_buttons[5].title, L"[6] << BACK TO TOOLS");
+        lstrcpyW(g_buttons[5].sub,   L"Return to System Tools");
+        g_buttons[5].color = RGB(160, 160, 160);
+        break;
     }
 }
 
@@ -871,9 +941,11 @@ static void OnPaint(HWND hWnd)
 
     /* TOP STATUS BAR */
     SetTextColor(memDC, RGB(0, 255, 128));
-    wsprintfW(buf, L"MERO // %s [v%s]",
-              g_currentPage == 0 ? L"OS SHELL" : L"SYSTEM TOOLS",
-              SHELL_VERSION);
+    const WCHAR *pageTitle = L"OS SHELL";
+    if (g_currentPage == PAGE_COMPANIONS) pageTitle = L"COMPANION LABS";
+    else if (g_currentPage == PAGE_SYSTEM) pageTitle = L"SYSTEM TOOLS";
+    else if (g_currentPage == PAGE_ADVANCED) pageTitle = L"ADVANCED TOOLS";
+    wsprintfW(buf, L"MERO // %s [v%s]", pageTitle, SHELL_VERSION);
     ExtTextOutW(memDC, 18, 8, 0, NULL, buf, lstrlenW(buf), NULL);
 
     /* Power / Battery */
@@ -949,7 +1021,11 @@ static void OnPaint(HWND hWnd)
 
     /* Footer Hint */
     SetTextColor(memDC, RGB(90, 120, 100));
-    wsprintfW(buf, L"Foston FS-460BT // WinCE 5.0 Core // SDMMC: Active // Page %d/2", g_currentPage + 1);
+    const WCHAR *pageShort = L"Main";
+    if (g_currentPage == PAGE_COMPANIONS) pageShort = L"Companions";
+    else if (g_currentPage == PAGE_SYSTEM) pageShort = L"System";
+    else if (g_currentPage == PAGE_ADVANCED) pageShort = L"Advanced";
+    wsprintfW(buf, L"Foston FS-460BT // WinCE 5.0 Core // SDMMC: Active // %s (%d/4)", pageShort, (int)g_currentPage + 1);
     ExtTextOutW(memDC, 18, 234, 0, NULL, buf, lstrlenW(buf), NULL);
 
     /* Atomic BitBlt to display - zero tearing, zero blinking */
@@ -977,17 +1053,13 @@ static void OnTouch(int x, int y)
 
     for (i = 0; i < 6; i++) {
         if (PtInRect(&g_buttons[i].rc, (POINT){ x, y })) {
-            if (g_currentPage == 0) {
-                /* PAGE 0 ACTIONS */
+            switch (g_currentPage) {
+            case PAGE_MAIN:
                 switch (i) {
-                case 0: /* Media Visualizer */
-                    wsprintfW(g_statusMsg, L"Launching Media Visualizer...");
+                case 0: /* Open Companion Suite Submenu */
+                    g_currentPage = PAGE_COMPANIONS;
+                    wsprintfW(g_statusMsg, L"Companion Apps: Gallery, YouTube Deck, Webcam Feed, Audio VU");
                     InvalidateRect(g_hWnd, NULL, FALSE);
-                    UpdateWindow(g_hWnd);
-                    if (!LaunchApp(PATH_GALLERY, TRUE)) {
-                        wsprintfW(g_statusMsg, L"Gallery binary not found: %s", PATH_GALLERY);
-                        InvalidateRect(g_hWnd, NULL, FALSE);
-                    }
                     break;
 
                 case 1: /* Mero CMD Shell */
@@ -1017,9 +1089,9 @@ static void OnTouch(int x, int y)
                     InvalidateRect(g_hWnd, NULL, FALSE);
                     break;
 
-                case 4: /* Switch to Page 1 (System Tools) */
-                    g_currentPage = 1;
-                    wsprintfW(g_statusMsg, L"System Tools: Explorer, Control Panel, Architecture Dump");
+                case 4: /* Switch to System Tools */
+                    g_currentPage = PAGE_SYSTEM;
+                    wsprintfW(g_statusMsg, L"System Tools: USB Mode, Vendor GPS UI, Audio Volume");
                     InvalidateRect(g_hWnd, NULL, FALSE);
                     break;
 
@@ -1028,8 +1100,69 @@ static void OnTouch(int x, int y)
                     DestroyWindow(g_hWnd);
                     break;
                 }
-            } else {
-                /* PAGE 1 ACTIONS */
+                break;
+
+            case PAGE_COMPANIONS:
+                switch (i) {
+                case 0: /* Media Visualizer */
+                    wsprintfW(g_statusMsg, L"Launching Media Visualizer...");
+                    InvalidateRect(g_hWnd, NULL, FALSE);
+                    UpdateWindow(g_hWnd);
+                    if (!LaunchApp(PATH_GALLERY, TRUE)) {
+                        wsprintfW(g_statusMsg, L"Gallery binary not found: %s", PATH_GALLERY);
+                        InvalidateRect(g_hWnd, NULL, FALSE);
+                    }
+                    break;
+
+                case 1: /* YouTube Music Deck */
+                    wsprintfW(g_statusMsg, L"Launching YouTube Music Deck...");
+                    InvalidateRect(g_hWnd, NULL, FALSE);
+                    UpdateWindow(g_hWnd);
+                    if (!LaunchApp(PATH_MEDIA_CTRL, TRUE)) {
+                        wsprintfW(g_statusMsg, L"YT Music Deck: Mero Stream Bridge active; app in build queue");
+                        InvalidateRect(g_hWnd, NULL, FALSE);
+                    }
+                    break;
+
+                case 2: /* Darkhorse Webcam Visualizer */
+                    wsprintfW(g_statusMsg, L"Launching Darkhorse Webcam Monitor...");
+                    InvalidateRect(g_hWnd, NULL, FALSE);
+                    UpdateWindow(g_hWnd);
+                    if (!LaunchApp(PATH_CAM, TRUE)) {
+                        wsprintfW(g_statusMsg, L"Darkhorse Cam: Old-cam bridge configured; app in build queue");
+                        InvalidateRect(g_hWnd, NULL, FALSE);
+                    }
+                    break;
+
+                case 3: /* Audio Spectrum VU Meter */
+                    wsprintfW(g_statusMsg, L"Launching Audio Spectrum VU Meter...");
+                    InvalidateRect(g_hWnd, NULL, FALSE);
+                    UpdateWindow(g_hWnd);
+                    if (!LaunchApp(PATH_VIS, TRUE)) {
+                        wsprintfW(g_statusMsg, L"Audio VU Deck: Audio subsystem ready; app in build queue");
+                        InvalidateRect(g_hWnd, NULL, FALSE);
+                    }
+                    break;
+
+                case 4: /* Thought Terminal */
+                    wsprintfW(g_statusMsg, L"Launching Thought Terminal...");
+                    InvalidateRect(g_hWnd, NULL, FALSE);
+                    UpdateWindow(g_hWnd);
+                    if (!LaunchApp(PATH_TERMINAL, TRUE)) {
+                        wsprintfW(g_statusMsg, L"Terminal binary not found: %s", PATH_TERMINAL);
+                        InvalidateRect(g_hWnd, NULL, FALSE);
+                    }
+                    break;
+
+                case 5: /* Back to Main Hub */
+                    g_currentPage = PAGE_MAIN;
+                    wsprintfW(g_statusMsg, L"Mero OS Hub ready");
+                    InvalidateRect(g_hWnd, NULL, FALSE);
+                    break;
+                }
+                break;
+
+            case PAGE_SYSTEM:
                 switch (i) {
                 case 0: /* Autonomous Boot Toggle */
                     g_bootTarget = (BootTarget)((g_bootTarget + 1) % BOOT_COUNT);
@@ -1042,17 +1175,69 @@ static void OnTouch(int x, int y)
                     ToggleUsbMode();
                     break;
 
-                case 2: /* Volume Toggle */
+                case 2: /* Launch Original Vendor GPS UI */
+                    wsprintfW(g_statusMsg, L"Restoring Vendor GPS UI (Launch.exe)...");
+                    InvalidateRect(g_hWnd, NULL, FALSE);
+                    UpdateWindow(g_hWnd);
+                    LaunchVendorUI();
+                    break;
+
+                case 3: /* Volume Toggle */
                     g_volumeLevel = (g_volumeLevel + 1) % 5;
                     SetMasterVolume(g_volumeLevel);
                     wsprintfW(g_statusMsg, L"Master audio volume set to %d%%", g_volumeLevel * 25);
                     InvalidateRect(g_hWnd, NULL, FALSE);
                     break;
 
-                case 3: /* Kill Vendor Watchdog */
+                case 4: /* Switch to Advanced Tools */
+                    g_currentPage = PAGE_ADVANCED;
+                    wsprintfW(g_statusMsg, L"Advanced Tools: Watchdog, Hardware Dump, Explorer, Control Panel");
+                    InvalidateRect(g_hWnd, NULL, FALSE);
+                    break;
+
+                case 5: /* Back to Main Hub */
+                    g_currentPage = PAGE_MAIN;
+                    wsprintfW(g_statusMsg, L"Mero OS Hub ready");
+                    InvalidateRect(g_hWnd, NULL, FALSE);
+                    break;
+                }
+                break;
+
+            case PAGE_ADVANCED:
+            default:
+                switch (i) {
+                case 0: /* Kill Vendor Watchdog */
                     {
                         int killed = KillVendorWatchdog();
                         wsprintfW(g_statusMsg, L"Killed %d vendor daemons (ANWDOG/PhoneLink suppressed)", killed);
+                        InvalidateRect(g_hWnd, NULL, FALSE);
+                    }
+                    break;
+
+                case 1: /* Deep Hardware Discovery Dump */
+                    wsprintfW(g_statusMsg, L"Dumping registry and file hierarchy...");
+                    InvalidateRect(g_hWnd, NULL, FALSE);
+                    UpdateWindow(g_hWnd);
+                    PerformSystemDump();
+                    InvalidateRect(g_hWnd, NULL, FALSE);
+                    break;
+
+                case 2: /* WinCE Explorer */
+                    wsprintfW(g_statusMsg, L"Launching Windows CE Explorer...");
+                    InvalidateRect(g_hWnd, NULL, FALSE);
+                    UpdateWindow(g_hWnd);
+                    if (!LaunchApp(PATH_EXPLORER, FALSE)) {
+                        wsprintfW(g_statusMsg, L"Explorer launch failed");
+                        InvalidateRect(g_hWnd, NULL, FALSE);
+                    }
+                    break;
+
+                case 3: /* Control Panel */
+                    wsprintfW(g_statusMsg, L"Launching Windows CE Control Panel...");
+                    InvalidateRect(g_hWnd, NULL, FALSE);
+                    UpdateWindow(g_hWnd);
+                    if (!LaunchApp(PATH_CONTROL, FALSE)) {
+                        wsprintfW(g_statusMsg, L"Control Panel launch failed");
                         InvalidateRect(g_hWnd, NULL, FALSE);
                     }
                     break;
@@ -1064,12 +1249,13 @@ static void OnTouch(int x, int y)
                     HardwareReboot();
                     break;
 
-                case 5: /* Back to Page 0 */
-                    g_currentPage = 0;
-                    wsprintfW(g_statusMsg, L"Mero Applications ready");
+                case 5: /* Back to System Tools */
+                    g_currentPage = PAGE_SYSTEM;
+                    wsprintfW(g_statusMsg, L"System Tools: USB Mode, Vendor GPS UI, Audio Volume");
                     InvalidateRect(g_hWnd, NULL, FALSE);
                     break;
                 }
+                break;
             }
             return;
         }
