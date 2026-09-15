@@ -417,8 +417,8 @@ static void CreateDesktopShortcuts(void)
 {
     HANDLE hFile;
     DWORD written;
-    const char *lnkShell = "26#\\SDMMC\\MERO\\mero-shell.exe";
-    const char *lnkCmd   = "24#\\SDMMC\\MERO\\mero-cmd.exe";
+    const char *lnkShell = "34#\\ResidentFlash\\MERO\\mero-flash.exe";
+    const char *lnkCmd   = "32#\\ResidentFlash\\MERO\\mero-cmd.exe";
     const char *lnkFlash = "34#\\ResidentFlash\\MERO\\mero-flash.exe";
 
     CreateDirectoryW(L"\\ResidentFlash\\MERO", NULL);

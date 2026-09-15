@@ -152,7 +152,9 @@ static void DiscoverFolders(void)
 
     /* 1. Standard Presets */
     AddFolderIfValid(L"\\SDMMC\\Stream", L"SDMMC: Host Stream");
+    AddFolderIfValid(L"\\ResidentFlash\\Stream", L"Flash: Host Stream");
     AddFolderIfValid(L"\\SDMMC\\Pictures", L"SDMMC: Pictures");
+    AddFolderIfValid(L"\\ResidentFlash\\Pictures", L"Flash: Pictures");
     AddFolderIfValid(L"\\SDMMC\\Gallery", L"SDMMC: Gallery");
     AddFolderIfValid(L"\\SDMMC\\Suzy", L"SDMMC: Suzy");
     AddFolderIfValid(L"\\SDMMC\\Wallpapers", L"SDMMC: Wallpapers");

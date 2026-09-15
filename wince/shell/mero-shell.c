@@ -262,8 +262,8 @@ static void CreateDesktopShortcuts(void)
 {
     HANDLE hFile;
     DWORD written;
-    const char *lnkShell = "26#\\SDMMC\\MERO\\mero-shell.exe";
-    const char *lnkCmd   = "24#\\SDMMC\\MERO\\mero-cmd.exe";
+    const char *lnkShell = "34#\\ResidentFlash\\MERO\\mero-flash.exe";
+    const char *lnkCmd   = "32#\\ResidentFlash\\MERO\\mero-cmd.exe";
     const char *lnkFlash = "34#\\ResidentFlash\\MERO\\mero-flash.exe";
 
     CreateDirectoryW(L"\\ResidentFlash\\MERO", NULL);
@@ -1036,6 +1036,24 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
                 CopyFileW(L"\\SDMMC\\MERO\\mero-cmd.ico", L"\\ResidentFlash\\MERO\\mero-cmd.ico", FALSE);
                 CopyFileW(L"\\SDMMC\\MERO\\mero-gallery.ico", L"\\ResidentFlash\\MERO\\mero-gallery.ico", FALSE);
                 CopyFileW(L"\\SDMMC\\MERO\\mero-flash.ico", L"\\ResidentFlash\\MERO\\mero-flash.ico", FALSE);
+
+                /* Mirror Stream folder to ResidentFlash for USB/offline resilience */
+                CreateDirectoryW(L"\\ResidentFlash\\Stream", NULL);
+                {
+                    WIN32_FIND_DATAW wfdStr;
+                    HANDLE hFStr = FindFirstFileW(L"\\SDMMC\\Stream\\*.*", &wfdStr);
+                    if (hFStr != INVALID_HANDLE_VALUE) {
+                        do {
+                            if (!(wfdStr.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+                                WCHAR sPath[MAX_PATH], dPath[MAX_PATH];
+                                wsprintfW(sPath, L"\\SDMMC\\Stream\\%s", wfdStr.cFileName);
+                                wsprintfW(dPath, L"\\ResidentFlash\\Stream\\%s", wfdStr.cFileName);
+                                CopyFileW(sPath, dPath, FALSE);
+                            }
+                        } while (FindNextFileW(hFStr, &wfdStr));
+                        FindClose(hFStr);
+                    }
+                }
             }
         }
         SetTimer(hWnd, TIMER_ID_TICK, 1000, NULL);
