@@ -12,7 +12,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#define SHELL_VERSION       L"0.2.4"
+#define SHELL_VERSION       L"0.2.5"
 #define TIMER_ID_TICK       1
 
 #define IOCTL_HAL_REBOOT    0x0001003C
@@ -21,6 +21,7 @@
 /* Windows CE Coredll exports */
 extern BOOL WINAPI KernelIoControl(DWORD dwIoControlCode, LPVOID lpInBuf, DWORD nInBufSize, LPVOID lpOutBuf, DWORD nOutBufSize, LPDWORD lpBytesReturned);
 extern DWORD WINAPI SetSystemPowerState(LPCWSTR pwsState, DWORD StateFlags, DWORD Options);
+extern BOOL WINAPI SetCleanRebootFlag(void);
 
 #define CFG_DIR             L"\\SDMMC\\MERO"
 #define CFG_FILE            L"\\SDMMC\\MERO\\shell.cfg"
@@ -33,6 +34,22 @@ extern DWORD WINAPI SetSystemPowerState(LPCWSTR pwsState, DWORD StateFlags, DWOR
 #define PATH_IGO8           L"\\SDMMC\\IGO8\\iGO8.exe"
 #define PATH_CONTROL        L"\\Windows\\control.exe"
 #define PATH_EXPLORER       L"\\Windows\\explorer.exe"
+
+typedef enum {
+    BOOT_FLASH = 0,    /* \ResidentFlash\MERO\mero-shell.exe */
+    BOOT_SDMMC = 1,    /* \SDMMC\MERO\mero-shell.exe */
+    BOOT_DESKTOP = 2,  /* explorer.exe */
+    BOOT_VENDOR = 3,   /* launch.exe */
+    BOOT_COUNT = 4
+} BootTarget;
+
+static BootTarget     g_bootTarget = BOOT_FLASH;
+static const WCHAR   *g_bootTargetNames[] = {
+    L"Flash: \\ResidentFlash",
+    L"SDMMC: \\SDMMC\\MERO",
+    L"WinCE Desktop",
+    L"Vendor (launch.exe)"
+};
 
 typedef enum {
     AUTOLAUNCH_NONE = 0,
@@ -194,6 +211,158 @@ static void HideVendorUI(void)
     }
 }
 
+/* Suppress and terminate Apical watchdog and vendor UI processes */
+static int KillVendorWatchdog(void)
+{
+    HANDLE hSnap;
+    PROCESSENTRY32 pe;
+    int count = 0;
+
+    HideVendorUI();
+
+    HWND hWndDog = FindWindowW(NULL, L"ANWWATCHDOG");
+    if (hWndDog) {
+        ShowWindow(hWndDog, SW_HIDE);
+        EnableWindow(hWndDog, FALSE);
+    }
+    HWND hWndPhone = FindWindowW(NULL, L"ANW_PHONELINK");
+    if (hWndPhone) {
+        ShowWindow(hWndPhone, SW_HIDE);
+        EnableWindow(hWndPhone, FALSE);
+    }
+
+    hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (hSnap != INVALID_HANDLE_VALUE) {
+        pe.dwSize = sizeof(pe);
+        if (Process32First(hSnap, &pe)) {
+            do {
+                if (_wcsicmp(pe.szExeFile, L"ANWDOG.exe") == 0 ||
+                    _wcsicmp(pe.szExeFile, L"PhoneLink.exe") == 0 ||
+                    _wcsicmp(pe.szExeFile, L"Launch.exe") == 0 ||
+                    _wcsicmp(pe.szExeFile, L"Main.exe") == 0 ||
+                    _wcsicmp(pe.szExeFile, L"YFMenu.exe") == 0) {
+                    
+                    HANDLE hProc = OpenProcess(0x0001 /* PROCESS_TERMINATE */, FALSE, pe.th32ProcessID);
+                    if (hProc) {
+                        TerminateProcess(hProc, 0);
+                        CloseHandle(hProc);
+                        count++;
+                    }
+                }
+            } while (Process32Next(hSnap, &pe));
+        }
+        CloseHandle(hSnap);
+    }
+    return count;
+}
+
+/* Create desktop shortcut (.lnk) files on Windows CE desktop */
+static void CreateDesktopShortcuts(void)
+{
+    HANDLE hFile;
+    DWORD written;
+    const char *lnkShell = "26#\\SDMMC\\MERO\\mero-shell.exe";
+    const char *lnkCmd   = "24#\\SDMMC\\MERO\\mero-cmd.exe";
+    const char *lnkFlash = "35#\\ResidentFlash\\MERO\\mero-shell.exe";
+
+    CreateDirectoryW(L"\\Windows\\Desktop", NULL);
+
+    hFile = CreateFileW(L"\\Windows\\Desktop\\Mero Shell.lnk", GENERIC_WRITE, FILE_SHARE_READ,
+                        NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile != INVALID_HANDLE_VALUE) {
+        WriteFile(hFile, lnkShell, (DWORD)strlen(lnkShell), &written, NULL);
+        CloseHandle(hFile);
+    }
+
+    hFile = CreateFileW(L"\\Windows\\Desktop\\Mero Cmd.lnk", GENERIC_WRITE, FILE_SHARE_READ,
+                        NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile != INVALID_HANDLE_VALUE) {
+        WriteFile(hFile, lnkCmd, (DWORD)strlen(lnkCmd), &written, NULL);
+        CloseHandle(hFile);
+    }
+
+    hFile = CreateFileW(L"\\Windows\\Desktop\\Resident Shell.lnk", GENERIC_WRITE, FILE_SHARE_READ,
+                        NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile != INVALID_HANDLE_VALUE) {
+        WriteFile(hFile, lnkFlash, (DWORD)strlen(lnkFlash), &written, NULL);
+        CloseHandle(hFile);
+    }
+}
+
+/* Query active HKLM\init\Launch50 boot target */
+static void QueryCurrentBootTarget(void)
+{
+    HKEY hKey;
+    WCHAR val[256];
+    DWORD valLen = sizeof(val);
+    DWORD type = 0;
+
+    g_bootTarget = BOOT_VENDOR;
+
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"init", 0, 0, &hKey) == ERROR_SUCCESS) {
+        if (RegQueryValueExW(hKey, L"Launch50", NULL, &type, (LPBYTE)val, &valLen) == ERROR_SUCCESS && type == REG_SZ) {
+            if (wcsstr(val, L"ResidentFlash")) {
+                g_bootTarget = BOOT_FLASH;
+            } else if (wcsstr(val, L"SDMMC")) {
+                g_bootTarget = BOOT_SDMMC;
+            } else if (wcsstr(val, L"explorer")) {
+                g_bootTarget = BOOT_DESKTOP;
+            } else {
+                g_bootTarget = BOOT_VENDOR;
+            }
+        }
+        RegCloseKey(hKey);
+    }
+}
+
+/* Apply new HKLM\init\Launch50 boot target and persist to flash */
+static BOOL ApplyBootTarget(BootTarget target)
+{
+    HKEY hKey;
+    const WCHAR *launchPath = NULL;
+    BOOL ok = FALSE;
+
+    g_bootTarget = target;
+
+    switch (target) {
+    case BOOT_FLASH:
+        CreateDirectoryW(L"\\ResidentFlash\\MERO", NULL);
+        CopyFileW(L"\\SDMMC\\MERO\\mero-shell.exe", L"\\ResidentFlash\\MERO\\mero-shell.exe", FALSE);
+        CopyFileW(L"\\SDMMC\\MERO\\mero-cmd.exe", L"\\ResidentFlash\\MERO\\mero-cmd.exe", FALSE);
+        launchPath = L"\\ResidentFlash\\MERO\\mero-shell.exe";
+        break;
+    case BOOT_SDMMC:
+        launchPath = L"\\SDMMC\\MERO\\mero-shell.exe";
+        break;
+    case BOOT_DESKTOP:
+        launchPath = L"explorer.exe";
+        break;
+    case BOOT_VENDOR:
+    default:
+        launchPath = L"launch.exe";
+        break;
+    }
+
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"init", 0, 0, &hKey) == ERROR_SUCCESS) {
+        DWORD len = (lstrlenW(launchPath) + 1) * sizeof(WCHAR);
+        if (RegSetValueExW(hKey, L"Launch50", 0, REG_SZ, (const BYTE*)launchPath, len) == ERROR_SUCCESS) {
+            RegFlushKey(HKEY_LOCAL_MACHINE);
+            ok = TRUE;
+        }
+        RegCloseKey(hKey);
+    }
+
+    /* Registry persistence verification canary */
+    if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, L"Software\\Mero", 0, NULL, 0, 0, NULL, &hKey, NULL) == ERROR_SUCCESS) {
+        DWORD flag = (DWORD)target + 100;
+        RegSetValueExW(hKey, L"BootConfig", 0, REG_DWORD, (const BYTE*)&flag, sizeof(DWORD));
+        RegFlushKey(HKEY_LOCAL_MACHINE);
+        RegCloseKey(hKey);
+    }
+
+    return ok;
+}
+
 static BOOL CALLBACK EnumMinimizeAllProc(HWND hWnd, LPARAM lParam)
 {
     (void)lParam;
@@ -218,12 +387,13 @@ static void ShowDesktop(void)
     if (!hTaskbar || !hDesktop) {
         /* Explorer shell not started yet; launch it to create desktop & taskbar */
         LaunchApp(PATH_EXPLORER, FALSE);
-        Sleep(400);
+        Sleep(500);
         hTaskbar = FindWindowW(L"HHTaskBar", NULL);
         hDesktop = FindWindowW(L"DesktopExplorerWindow", NULL);
     }
 
-    HideVendorUI();
+    KillVendorWatchdog();
+    CreateDesktopShortcuts();
     EnumWindows(EnumMinimizeAllProc, 0);
 
     if (hDesktop) {
@@ -237,12 +407,15 @@ static void ShowDesktop(void)
         ShowWindow(hTaskbar, SW_SHOW);
         SetWindowPos(hTaskbar, HWND_TOPMOST, 0, 0, 0, 0,
                      SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+        InvalidateRect(hTaskbar, NULL, TRUE);
+        UpdateWindow(hTaskbar);
     }
 
     RedrawWindow(NULL, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
 
+    /* Hide Mero Shell completely from display list and touch routing */
     if (g_hWnd) {
-        ShowWindow(g_hWnd, SW_MINIMIZE);
+        ShowWindow(g_hWnd, SW_HIDE);
     }
 }
 
@@ -250,6 +423,7 @@ static void ShowDesktop(void)
 static void HardwareReboot(void)
 {
     DWORD bytesRet = 0;
+    SetCleanRebootFlag();
     KernelIoControl(IOCTL_HAL_REBOOT, NULL, 0, NULL, 0, &bytesRet);
     SetSystemPowerState(NULL, POWER_STATE_RESET, 0);
 }
@@ -266,12 +440,14 @@ static BOOL LaunchApp(const WCHAR *path, BOOL minimizeShell)
         CloseHandle(pi.hProcess);
         CloseHandle(pi.hThread);
         if (minimizeShell && g_hWnd) {
-            /* Yield focus cleanly so launched app takes full screen */
-            ShowWindow(g_hWnd, SW_MINIMIZE);
+            /* Yield focus completely so launched app takes full screen */
+            ShowWindow(g_hWnd, SW_HIDE);
         }
     }
     return ret;
 }
+
+static void DumpLaunchStrings(void);
 
 /* Perform a deep hardware & system discovery scan to SD card */
 static void PerformSystemDump(void)
@@ -401,7 +577,66 @@ static void PerformSystemDump(void)
     #undef WRITE_STR
 
     CloseHandle(hFile);
-    wsprintfW(g_statusMsg, L"SUCCESS // Dump written to \\SDMMC\\MERO\\system_dump.txt");
+
+    /* Extract strings from \Windows\Launch.exe */
+    DumpLaunchStrings();
+
+    wsprintfW(g_statusMsg, L"SUCCESS // Dump & strings written to \\SDMMC\\MERO");
+}
+
+/* Extract interesting string references from vendor \\Windows\\Launch.exe */
+static void DumpLaunchStrings(void)
+{
+    HANDLE hIn, hOut;
+    DWORD bytesRead, bytesWritten;
+    static char buf[4096];
+    char line[512];
+    int i, len;
+
+    hIn = CreateFileW(L"\\Windows\\Launch.exe", GENERIC_READ, FILE_SHARE_READ, NULL,
+                      OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hIn == INVALID_HANDLE_VALUE) return;
+
+    hOut = CreateFileW(L"\\SDMMC\\MERO\\launch_strings.txt", GENERIC_WRITE, FILE_SHARE_READ,
+                       NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hOut == INVALID_HANDLE_VALUE) {
+        CloseHandle(hIn);
+        return;
+    }
+
+    const char *hdr = "=== STRINGS EXTRACTED FROM \\Windows\\Launch.exe ===\r\n\r\n";
+    WriteFile(hOut, hdr, (DWORD)strlen(hdr), &bytesWritten, NULL);
+
+    while (ReadFile(hIn, buf, sizeof(buf) - 2, &bytesRead, NULL) && bytesRead > 0) {
+        for (i = 0; i < (int)bytesRead - 4; i++) {
+            if (buf[i] >= 32 && buf[i] <= 126) {
+                len = 0;
+                while (i + len < (int)bytesRead && buf[i + len] >= 32 && buf[i + len] <= 126 && len < 200) {
+                    len++;
+                }
+                if (len >= 5) {
+                    char temp[256];
+                    memcpy(temp, &buf[i], len);
+                    temp[len] = '\0';
+                    if (strstr(temp, ".ini") || strstr(temp, ".INI") ||
+                        strstr(temp, ".bmp") || strstr(temp, ".BMP") ||
+                        strstr(temp, ".exe") || strstr(temp, ".EXE") ||
+                        strstr(temp, "SDMMC") || strstr(temp, "Resident") ||
+                        strstr(temp, "Navi") || strstr(temp, "navi") ||
+                        strstr(temp, "Auto") || strstr(temp, "auto") ||
+                        strstr(temp, "Path") || strstr(temp, "Init") ||
+                        strstr(temp, "Software") || strstr(temp, "Menu")) {
+                        snprintf(line, sizeof(line), "ASCII: %s\r\n", temp);
+                        WriteFile(hOut, line, (DWORD)strlen(line), &bytesWritten, NULL);
+                    }
+                    i += len;
+                }
+            }
+        }
+    }
+
+    CloseHandle(hIn);
+    CloseHandle(hOut);
 }
 
 /* Update button text & colors based on current page */
@@ -451,29 +686,29 @@ static void UpdateButtons(void)
         g_buttons[5].color = RGB(255, 80, 80);
     } else {
         /* PAGE 1: System Tools & Hardware Options */
-        lstrcpyW(g_buttons[0].title, L"[1] CONTROL PANEL");
-        lstrcpyW(g_buttons[0].sub,   L"Launch Windows CE Control Panel");
-        g_buttons[0].color = RGB(0, 220, 255);
+        lstrcpyW(g_buttons[0].title, L"[1] AUTONOMOUS BOOT");
+        lstrcpyW(g_buttons[0].sub,   g_bootTargetNames[g_bootTarget]);
+        g_buttons[0].color = RGB(0, 255, 128);
 
         lstrcpyW(g_buttons[1].title, L"[2] SHOW DESKTOP");
-        lstrcpyW(g_buttons[1].sub,   L"Reveal Taskbar & Minimize Windows");
-        g_buttons[1].color = RGB(0, 255, 128);
-
-        lstrcpyW(g_buttons[2].title, L"[3] FILE EXPLORER");
-        lstrcpyW(g_buttons[2].sub,   L"Browse ResidentFlash & Files");
-        g_buttons[2].color = RGB(100, 180, 255);
+        lstrcpyW(g_buttons[1].sub,   L"Hide Shell & Reveal WinCE Desktop");
+        g_buttons[1].color = RGB(0, 220, 255);
 
         {
             WCHAR volBuf[32];
             wsprintfW(volBuf, L"Master Level: %d%%", g_volumeLevel * 25);
-            lstrcpyW(g_buttons[3].title, L"[4] VOLUME TOGGLE");
-            lstrcpyW(g_buttons[3].sub, volBuf);
-            g_buttons[3].color = RGB(255, 200, 40);
+            lstrcpyW(g_buttons[2].title, L"[3] VOLUME TOGGLE");
+            lstrcpyW(g_buttons[2].sub, volBuf);
+            g_buttons[2].color = RGB(255, 200, 40);
         }
 
+        lstrcpyW(g_buttons[3].title, L"[4] KILL VENDOR DOG");
+        lstrcpyW(g_buttons[3].sub,   L"Terminate ANWDOG & PhoneLink");
+        g_buttons[3].color = RGB(255, 80, 80);
+
         lstrcpyW(g_buttons[4].title, L"[5] REBOOT DEVICE");
-        lstrcpyW(g_buttons[4].sub,   L"Trigger Cold Boot for LOGO.BMP");
-        g_buttons[4].color = RGB(255, 100, 80);
+        lstrcpyW(g_buttons[4].sub,   L"Soft Reset (Power Button If Off)");
+        g_buttons[4].color = RGB(255, 120, 80);
 
         lstrcpyW(g_buttons[5].title, L"[6] << BACK TO MAIN");
         lstrcpyW(g_buttons[5].sub,   L"Return to Mero Applications");
@@ -665,40 +900,35 @@ static void OnTouch(int x, int y)
             } else {
                 /* PAGE 1 ACTIONS */
                 switch (i) {
-                case 0: /* Control Panel */
-                    wsprintfW(g_statusMsg, L"Launching Windows Control Panel...");
+                case 0: /* Autonomous Boot Toggle */
+                    g_bootTarget = (BootTarget)((g_bootTarget + 1) % BOOT_COUNT);
+                    ApplyBootTarget(g_bootTarget);
+                    wsprintfW(g_statusMsg, L"BOOT TARGET: %s (SAVED TO HKLM)", g_bootTargetNames[g_bootTarget]);
                     InvalidateRect(g_hWnd, NULL, FALSE);
-                    UpdateWindow(g_hWnd);
-                    if (!LaunchApp(PATH_CONTROL, TRUE)) {
-                        wsprintfW(g_statusMsg, L"control.exe not available on this ROM");
-                        InvalidateRect(g_hWnd, NULL, FALSE);
-                    }
                     break;
 
                 case 1: /* Restore Taskbar & WinCE Desktop */
                     ShowDesktop();
-                    wsprintfW(g_statusMsg, L"Windows CE Desktop & Taskbar restored");
+                    wsprintfW(g_statusMsg, L"Windows CE Desktop revealed (shortcuts created)");
                     break;
 
-                case 2: /* File Explorer */
-                    wsprintfW(g_statusMsg, L"Launching Windows File Explorer...");
-                    InvalidateRect(g_hWnd, NULL, FALSE);
-                    UpdateWindow(g_hWnd);
-                    if (!LaunchApp(PATH_EXPLORER, TRUE)) {
-                        wsprintfW(g_statusMsg, L"explorer.exe not found");
-                        InvalidateRect(g_hWnd, NULL, FALSE);
-                    }
-                    break;
-
-                case 3: /* Volume Toggle */
+                case 2: /* Volume Toggle */
                     g_volumeLevel = (g_volumeLevel + 1) % 5;
                     SetMasterVolume(g_volumeLevel);
                     wsprintfW(g_statusMsg, L"Master audio volume set to %d%%", g_volumeLevel * 25);
                     InvalidateRect(g_hWnd, NULL, FALSE);
                     break;
 
+                case 3: /* Kill Vendor Watchdog */
+                    {
+                        int killed = KillVendorWatchdog();
+                        wsprintfW(g_statusMsg, L"Killed %d vendor daemons (ANWDOG/PhoneLink suppressed)", killed);
+                        InvalidateRect(g_hWnd, NULL, FALSE);
+                    }
+                    break;
+
                 case 4: /* Hardware Cold Reboot */
-                    wsprintfW(g_statusMsg, L"Triggering cold reboot...");
+                    wsprintfW(g_statusMsg, L"Reboot triggered. Tap Power if battery is dead.");
                     InvalidateRect(g_hWnd, NULL, FALSE);
                     UpdateWindow(g_hWnd);
                     HardwareReboot();
@@ -725,8 +955,12 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         HideVendorUI();
         UpdateSystemStatus();
         SetMasterVolume(g_volumeLevel);
+        QueryCurrentBootTarget();
         UpdateButtons();
         LoadConfig();
+        if (GetFileAttributesW(L"\\SDMMC\\MERO\\launch_strings.txt") == 0xFFFFFFFF) {
+            PerformSystemDump();
+        }
         SetTimer(hWnd, TIMER_ID_TICK, 1000, NULL);
         return 0;
 
@@ -796,6 +1030,17 @@ int WINAPI WinMain(
     g_hInstance = hInstance;
     g_screenW = GetSystemMetrics(SM_CXSCREEN);
     g_screenH = GetSystemMetrics(SM_CYSCREEN);
+
+    /* Single instance check: if shell already running (e.g. hidden for desktop), restore it */
+    HWND hExisting = FindWindowW(L"MeroShellWndClass", L"Mero Shell");
+    if (hExisting) {
+        ShowWindow(hExisting, SW_SHOWNORMAL);
+        SetWindowPos(hExisting, HWND_TOPMOST, 0, 0, g_screenW, g_screenH, SWP_SHOWWINDOW);
+        SetForegroundWindow(hExisting);
+        InvalidateRect(hExisting, NULL, TRUE);
+        UpdateWindow(hExisting);
+        return 0;
+    }
 
     memset(&wc, 0, sizeof(wc));
     wc.lpfnWndProc   = WndProc;

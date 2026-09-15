@@ -11,7 +11,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#define CMD_VERSION         L"0.1.3"
+#define CMD_VERSION         L"0.1.4"
 #define MAX_LINES           120
 #define LINE_LEN            128
 #define LINES_PER_SCREEN    11
@@ -21,6 +21,7 @@
 
 extern BOOL WINAPI KernelIoControl(DWORD dwIoControlCode, LPVOID lpInBuf, DWORD nInBufSize, LPVOID lpOutBuf, DWORD nOutBufSize, LPDWORD lpBytesReturned);
 extern DWORD WINAPI SetSystemPowerState(LPCWSTR pwsState, DWORD StateFlags, DWORD Options);
+extern BOOL WINAPI SetCleanRebootFlag(void);
 
 typedef struct {
     RECT rc;
@@ -35,7 +36,7 @@ enum {
     CMD_ID_MEM,
     CMD_ID_PS,
     CMD_ID_KILL_LAUNCH,
-    CMD_ID_WINLIST,
+    CMD_ID_BOOT,
     CMD_ID_DESKTOP,
     CMD_ID_REBOOT,
     CMD_ID_EXPLORER,
@@ -229,7 +230,7 @@ static BOOL CALLBACK CmdDumpAllWindowsProc(HWND hWnd, LPARAM lParam)
         snprintf(line, sizeof(line),
             "HWND: 0x%08X | PID: 0x%08X (%ls) | Rect: [%d,%d-%d,%d] | Vis: %s | Class: \"%ls\" | Title: \"%ls\"\r\n",
             (unsigned int)hWnd, (unsigned int)pid, procName,
-            rc.left, rc.top, rc.right, rc.bottom,
+            (int)rc.left, (int)rc.top, (int)rc.right, (int)rc.bottom,
             isVis ? "YES" : "NO",
             className, title);
         WriteFile(hFile, line, (DWORD)strlen(line), &written, NULL);
@@ -343,19 +344,46 @@ static BOOL CALLBACK CmdKillAnyVendorWindowProc(HWND hWnd, LPARAM lParam)
 static void CmdUniversalKill(void)
 {
     int count = 0;
-    TermPrint(L"[KILL] Scanning for vendor UI windows...");
+    TermPrint(L"[KILL] Scanning for vendor UI windows & watchdogs...");
 
-    /* 1. Universal fullscreen window sweep */
+    /* 1. Hide vendor windows & dialogs */
+    HWND hWndVendor = FindWindowW(NULL, L"Launch");
+    if (!hWndVendor) hWndVendor = FindWindowW(L"Launch", NULL);
+    if (!hWndVendor) hWndVendor = FindWindowW(NULL, L"Main");
+    if (!hWndVendor) hWndVendor = FindWindowW(L"Main", NULL);
+    if (hWndVendor) {
+        ShowWindow(hWndVendor, SW_HIDE);
+        EnableWindow(hWndVendor, FALSE);
+        count++;
+    }
+
+    HWND hWndDog = FindWindowW(NULL, L"ANWWATCHDOG");
+    if (hWndDog) {
+        ShowWindow(hWndDog, SW_HIDE);
+        EnableWindow(hWndDog, FALSE);
+        count++;
+    }
+
+    HWND hWndPhone = FindWindowW(NULL, L"ANW_PHONELINK");
+    if (hWndPhone) {
+        ShowWindow(hWndPhone, SW_HIDE);
+        EnableWindow(hWndPhone, FALSE);
+        count++;
+    }
+
+    /* 2. Universal fullscreen window sweep */
     EnumWindows(CmdKillAnyVendorWindowProc, (LPARAM)&count);
 
-    /* 2. Process table sweep for Launch.exe / Main.exe */
+    /* 3. Process table sweep for Watchdog & Launchers */
     HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (hSnap != INVALID_HANDLE_VALUE) {
         PROCESSENTRY32 pe;
         pe.dwSize = sizeof(pe);
         if (Process32First(hSnap, &pe)) {
             do {
-                if (_wcsicmp(pe.szExeFile, L"Launch.exe") == 0 ||
+                if (_wcsicmp(pe.szExeFile, L"ANWDOG.exe") == 0 ||
+                    _wcsicmp(pe.szExeFile, L"PhoneLink.exe") == 0 ||
+                    _wcsicmp(pe.szExeFile, L"Launch.exe") == 0 ||
                     _wcsicmp(pe.szExeFile, L"Main.exe") == 0 ||
                     _wcsicmp(pe.szExeFile, L"YFMenu.exe") == 0) {
                     
@@ -380,6 +408,40 @@ static void CmdUniversalKill(void)
         WCHAR line[64];
         wsprintfW(line, L"[KILL] Suppressed %d vendor components!", count);
         TermPrint(line);
+    }
+    CmdWinList();
+}
+
+/* Create desktop shortcut (.lnk) files on Windows CE desktop */
+static void CreateDesktopShortcuts(void)
+{
+    HANDLE hFile;
+    DWORD written;
+    const char *lnkShell = "26#\\SDMMC\\MERO\\mero-shell.exe";
+    const char *lnkCmd   = "24#\\SDMMC\\MERO\\mero-cmd.exe";
+    const char *lnkFlash = "35#\\ResidentFlash\\MERO\\mero-shell.exe";
+
+    CreateDirectoryW(L"\\Windows\\Desktop", NULL);
+
+    hFile = CreateFileW(L"\\Windows\\Desktop\\Mero Shell.lnk", GENERIC_WRITE, FILE_SHARE_READ,
+                        NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile != INVALID_HANDLE_VALUE) {
+        WriteFile(hFile, lnkShell, (DWORD)strlen(lnkShell), &written, NULL);
+        CloseHandle(hFile);
+    }
+
+    hFile = CreateFileW(L"\\Windows\\Desktop\\Mero Cmd.lnk", GENERIC_WRITE, FILE_SHARE_READ,
+                        NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile != INVALID_HANDLE_VALUE) {
+        WriteFile(hFile, lnkCmd, (DWORD)strlen(lnkCmd), &written, NULL);
+        CloseHandle(hFile);
+    }
+
+    hFile = CreateFileW(L"\\Windows\\Desktop\\Resident Shell.lnk", GENERIC_WRITE, FILE_SHARE_READ,
+                        NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile != INVALID_HANDLE_VALUE) {
+        WriteFile(hFile, lnkFlash, (DWORD)strlen(lnkFlash), &written, NULL);
+        CloseHandle(hFile);
     }
 }
 
@@ -407,12 +469,13 @@ static void CmdDesktop(void)
             CloseHandle(pi.hProcess);
             CloseHandle(pi.hThread);
         }
-        Sleep(400);
+        Sleep(500);
         hTaskbar = FindWindowW(L"HHTaskBar", NULL);
         hDesktop = FindWindowW(L"DesktopExplorerWindow", NULL);
     }
 
-    /* Minimize all open applications */
+    CmdUniversalKill();
+    CreateDesktopShortcuts();
     EnumWindows(CmdMinimizeAllProc, 0);
 
     /* Show and activate Desktop */
@@ -428,22 +491,80 @@ static void CmdDesktop(void)
         ShowWindow(hTaskbar, SW_SHOW);
         SetWindowPos(hTaskbar, HWND_TOPMOST, 0, 0, 0, 0,
                      SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+        InvalidateRect(hTaskbar, NULL, TRUE);
+        UpdateWindow(hTaskbar);
     }
 
     /* Force display repaint */
     RedrawWindow(NULL, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
 
-    ShowWindow(g_hWnd, SW_MINIMIZE);
+    /* Hide Mero Cmd completely from display list and touch routing */
+    ShowWindow(g_hWnd, SW_HIDE);
 }
 
 static void CmdReboot(void)
 {
     DWORD bytesRet = 0;
-    TermPrint(L"[REBOOT] Triggering hardware cold restart...");
+    TermPrint(L"[REBOOT] Triggering restart. Tap Power if battery is dead.");
     UpdateWindow(g_hWnd);
     Sleep(200);
+    SetCleanRebootFlag();
     KernelIoControl(IOCTL_HAL_REBOOT, NULL, 0, NULL, 0, &bytesRet);
     SetSystemPowerState(NULL, POWER_STATE_RESET, 0);
+}
+
+static void CmdRegInit(void);
+
+static void CmdBoot(const WCHAR *arg)
+{
+    HKEY hKey;
+    WCHAR line[256];
+
+    if (!arg || !*arg) {
+        CmdRegInit();
+        TermPrint(L"Usage: boot flash | boot sd | boot desktop | boot vendor");
+        return;
+    }
+
+    const WCHAR *newTarget = NULL;
+    if (_wcsicmp(arg, L"flash") == 0) {
+        CreateDirectoryW(L"\\ResidentFlash\\MERO", NULL);
+        CopyFileW(L"\\SDMMC\\MERO\\mero-shell.exe", L"\\ResidentFlash\\MERO\\mero-shell.exe", FALSE);
+        CopyFileW(L"\\SDMMC\\MERO\\mero-cmd.exe", L"\\ResidentFlash\\MERO\\mero-cmd.exe", FALSE);
+        newTarget = L"\\ResidentFlash\\MERO\\mero-shell.exe";
+        TermPrint(L"[BOOT] Copied shell & cmd to \\ResidentFlash\\MERO\\");
+    } else if (_wcsicmp(arg, L"sd") == 0) {
+        newTarget = L"\\SDMMC\\MERO\\mero-shell.exe";
+    } else if (_wcsicmp(arg, L"desktop") == 0) {
+        newTarget = L"explorer.exe";
+    } else if (_wcsicmp(arg, L"vendor") == 0) {
+        newTarget = L"launch.exe";
+    } else {
+        TermPrint(L"[BOOT] Unknown target. Use: flash, sd, desktop, vendor");
+        return;
+    }
+
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"init", 0, 0, &hKey) == ERROR_SUCCESS) {
+        DWORD len = (lstrlenW(newTarget) + 1) * sizeof(WCHAR);
+        if (RegSetValueExW(hKey, L"Launch50", 0, REG_SZ, (const BYTE*)newTarget, len) == ERROR_SUCCESS) {
+            RegFlushKey(HKEY_LOCAL_MACHINE);
+            wsprintfW(line, L"[BOOT] Set Launch50 = \"%s\" (SAVED)", newTarget);
+            TermPrint(line);
+        } else {
+            TermPrint(L"[BOOT] Failed to write Launch50 key");
+        }
+        RegCloseKey(hKey);
+    } else {
+        TermPrint(L"[BOOT] Failed to open HKLM\\init");
+    }
+
+    /* Registry persistence verification canary */
+    if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, L"Software\\Mero", 0, NULL, 0, 0, NULL, &hKey, NULL) == ERROR_SUCCESS) {
+        DWORD flag = 1;
+        RegSetValueExW(hKey, L"BootConfig", 0, REG_DWORD, (const BYTE*)&flag, sizeof(DWORD));
+        RegFlushKey(HKEY_LOCAL_MACHINE);
+        RegCloseKey(hKey);
+    }
 }
 
 /* Command: cat file */
@@ -552,8 +673,8 @@ static void InitDockButtons(void)
     g_dockBtns[4].color = RGB(255, 80, 80);
 
     SetRect(&g_dockBtns[5].rc, x0 + (btnW+spacing)*5, y1, x0 + (btnW+spacing)*5 + btnW, y1 + btnH);
-    g_dockBtns[5].label = L"winlist";
-    g_dockBtns[5].cmdId = CMD_ID_WINLIST;
+    g_dockBtns[5].label = L"boot";
+    g_dockBtns[5].cmdId = CMD_ID_BOOT;
     g_dockBtns[5].color = RGB(180, 140, 255);
 
     /* Row 2 */
@@ -719,8 +840,13 @@ static void HandleCommand(int cmdId)
     case CMD_ID_KILL_LAUNCH:
         CmdUniversalKill();
         break;
-    case CMD_ID_WINLIST:
-        CmdWinList();
+    case CMD_ID_BOOT:
+        {
+            static int cycle = 0;
+            static const WCHAR *targets[] = { L"flash", L"sd", L"desktop", L"vendor" };
+            CmdBoot(targets[cycle % 4]);
+            cycle++;
+        }
         break;
     case CMD_ID_DESKTOP:
         CmdDesktop();
@@ -844,6 +970,17 @@ int WINAPI WinMain(
     g_hInstance = hInstance;
     g_screenW = GetSystemMetrics(SM_CXSCREEN);
     g_screenH = GetSystemMetrics(SM_CYSCREEN);
+
+    /* Single instance check: if cmd already running (e.g. hidden for desktop), restore it */
+    HWND hExisting = FindWindowW(L"MeroCmdWndClass", L"Mero Cmd");
+    if (hExisting) {
+        ShowWindow(hExisting, SW_SHOWNORMAL);
+        SetWindowPos(hExisting, HWND_TOPMOST, 0, 0, g_screenW, g_screenH, SWP_SHOWWINDOW);
+        SetForegroundWindow(hExisting);
+        InvalidateRect(hExisting, NULL, TRUE);
+        UpdateWindow(hExisting);
+        return 0;
+    }
 
     memset(&wc, 0, sizeof(wc));
     wc.lpfnWndProc   = WndProc;
