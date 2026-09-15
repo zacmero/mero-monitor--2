@@ -182,6 +182,17 @@ static void CmdKillLaunch(void)
     PROCESSENTRY32 pe;
     BOOL found = FALSE;
 
+    /* First hide any vendor window immediately */
+    HWND hWndVendor = FindWindowW(NULL, L"Launch");
+    if (!hWndVendor) hWndVendor = FindWindowW(L"Launch", NULL);
+    if (!hWndVendor) hWndVendor = FindWindowW(NULL, L"Main");
+    if (!hWndVendor) hWndVendor = FindWindowW(L"Main", NULL);
+    if (hWndVendor) {
+        ShowWindow(hWndVendor, SW_HIDE);
+        EnableWindow(hWndVendor, FALSE);
+        TermPrint(L"[KILL] Hid vendor UI window from display!");
+    }
+
     hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (hSnap == INVALID_HANDLE_VALUE) {
         TermPrint(L"[KILL] Failed to create process snapshot");
@@ -193,16 +204,20 @@ static void CmdKillLaunch(void)
         do {
             if (_wcsicmp(pe.szExeFile, L"Launch.exe") == 0 ||
                 _wcsicmp(pe.szExeFile, L"Main.exe") == 0) {
-                HANDLE hProc = OpenProcess(0, FALSE, pe.th32ProcessID);
+                HANDLE hProc = OpenProcess(0x0001 /* PROCESS_TERMINATE */, FALSE, pe.th32ProcessID);
                 WCHAR line[128];
                 if (hProc) {
-                    TerminateProcess(hProc, 0);
+                    if (TerminateProcess(hProc, 0)) {
+                        wsprintfW(line, L"[KILL] Terminated %s (PID 0x%08X)!",
+                                  pe.szExeFile, pe.th32ProcessID);
+                    } else {
+                        wsprintfW(line, L"[KILL] TerminateProcess failed (err %lu)", GetLastError());
+                    }
                     CloseHandle(hProc);
-                    wsprintfW(line, L"[KILL] Terminated %s (PID 0x%08X)!",
-                              pe.szExeFile, pe.th32ProcessID);
                     TermPrint(line);
                 } else {
-                    wsprintfW(line, L"[KILL] Cannot open process PID 0x%08X", pe.th32ProcessID);
+                    wsprintfW(line, L"[KILL] OpenProcess failed for PID 0x%08X (err %lu)",
+                              pe.th32ProcessID, GetLastError());
                     TermPrint(line);
                 }
                 found = TRUE;
@@ -370,11 +385,13 @@ static void InitDockButtons(void)
     g_dockBtns[13].color = RGB(160, 180, 200);
 }
 
-/* Paint Terminal */
+/* Paint Terminal (Double Buffered) */
 static void OnPaint(HWND hWnd)
 {
     PAINTSTRUCT ps;
     HDC hdc;
+    HDC memDC;
+    HBITMAP memBmp, oldBmp;
     RECT rc;
     WCHAR buf[128];
     int i;
@@ -383,25 +400,29 @@ static void OnPaint(HWND hWnd)
     hdc = BeginPaint(hWnd, &ps);
     GetClientRect(hWnd, &rc);
 
-    FillRect(hdc, &rc, (HBRUSH)GetStockObject(BLACK_BRUSH));
-    SetBkMode(hdc, TRANSPARENT);
+    memDC = CreateCompatibleDC(hdc);
+    memBmp = CreateCompatibleBitmap(hdc, rc.right, rc.bottom);
+    oldBmp = (HBITMAP)SelectObject(memDC, memBmp);
+
+    FillRect(memDC, &rc, (HBRUSH)GetStockObject(BLACK_BRUSH));
+    SetBkMode(memDC, TRANSPARENT);
 
     /* Header Bar */
-    SetTextColor(hdc, RGB(0, 255, 128));
+    SetTextColor(memDC, RGB(0, 255, 128));
     wsprintfW(buf, L"MERO // CMD [v%s]", CMD_VERSION);
-    ExtTextOutW(hdc, 10, 4, 0, NULL, buf, lstrlenW(buf), NULL);
+    ExtTextOutW(memDC, 10, 4, 0, NULL, buf, lstrlenW(buf), NULL);
 
-    SetTextColor(hdc, RGB(160, 160, 160));
+    SetTextColor(memDC, RGB(160, 160, 160));
     wsprintfW(buf, L"%d lines", g_historyCount);
-    ExtTextOutW(hdc, 220, 4, 0, NULL, buf, lstrlenW(buf), NULL);
+    ExtTextOutW(memDC, 220, 4, 0, NULL, buf, lstrlenW(buf), NULL);
 
     /* Header divider */
     {
         HPEN hPen = CreatePen(PS_SOLID, 1, RGB(40, 80, 50));
-        HPEN hOld = (HPEN)SelectObject(hdc, hPen);
-        MoveToEx(hdc, 10, 22, NULL);
-        LineTo(hdc, g_screenW - 10, 22);
-        SelectObject(hdc, hOld);
+        HPEN hOld = (HPEN)SelectObject(memDC, hPen);
+        MoveToEx(memDC, 10, 22, NULL);
+        LineTo(memDC, g_screenW - 10, 22);
+        SelectObject(memDC, hOld);
         DeleteObject(hPen);
     }
 
@@ -412,15 +433,15 @@ static void OnPaint(HWND hWnd)
         if (idx < g_historyCount) {
             const WCHAR *txt = g_history[idx];
             if (txt[0] == L'[') {
-                SetTextColor(hdc, RGB(0, 255, 128));
+                SetTextColor(memDC, RGB(0, 255, 128));
             } else if (wcsstr(txt, L"PID:")) {
-                SetTextColor(hdc, RGB(255, 220, 60));
+                SetTextColor(memDC, RGB(255, 220, 60));
             } else if (wcsstr(txt, L"KILL")) {
-                SetTextColor(hdc, RGB(255, 80, 80));
+                SetTextColor(memDC, RGB(255, 80, 80));
             } else {
-                SetTextColor(hdc, RGB(220, 220, 220));
+                SetTextColor(memDC, RGB(220, 220, 220));
             }
-            ExtTextOutW(hdc, 12, y, 0, NULL, txt, lstrlenW(txt), NULL);
+            ExtTextOutW(memDC, 12, y, 0, NULL, txt, lstrlenW(txt), NULL);
         }
         y += 15;
     }
@@ -428,10 +449,10 @@ static void OnPaint(HWND hWnd)
     /* Dock divider */
     {
         HPEN hPen = CreatePen(PS_SOLID, 1, RGB(40, 80, 50));
-        HPEN hOld = (HPEN)SelectObject(hdc, hPen);
-        MoveToEx(hdc, 10, 198, NULL);
-        LineTo(hdc, g_screenW - 10, 198);
-        SelectObject(hdc, hOld);
+        HPEN hOld = (HPEN)SelectObject(memDC, hPen);
+        MoveToEx(memDC, 10, 198, NULL);
+        LineTo(memDC, g_screenW - 10, 198);
+        SelectObject(memDC, hOld);
         DeleteObject(hPen);
     }
 
@@ -439,21 +460,28 @@ static void OnPaint(HWND hWnd)
     for (i = 0; i < 14; i++) {
         RECT bRc = g_dockBtns[i].rc;
         HPEN hPen = CreatePen(PS_SOLID, 1, g_dockBtns[i].color);
-        HPEN hOld = (HPEN)SelectObject(hdc, hPen);
+        HPEN hOld = (HPEN)SelectObject(memDC, hPen);
 
-        MoveToEx(hdc, bRc.left, bRc.top, NULL);
-        LineTo(hdc, bRc.right, bRc.top);
-        LineTo(hdc, bRc.right, bRc.bottom);
-        LineTo(hdc, bRc.left, bRc.bottom);
-        LineTo(hdc, bRc.left, bRc.top);
+        MoveToEx(memDC, bRc.left, bRc.top, NULL);
+        LineTo(memDC, bRc.right, bRc.top);
+        LineTo(memDC, bRc.right, bRc.bottom);
+        LineTo(memDC, bRc.left, bRc.bottom);
+        LineTo(memDC, bRc.left, bRc.top);
 
-        SelectObject(hdc, hOld);
+        SelectObject(memDC, hOld);
         DeleteObject(hPen);
 
-        SetTextColor(hdc, g_dockBtns[i].color);
-        ExtTextOutW(hdc, bRc.left + 6, bRc.top + (i >= 12 ? 2 : 6), 0, NULL,
+        SetTextColor(memDC, g_dockBtns[i].color);
+        ExtTextOutW(memDC, bRc.left + 6, bRc.top + (i >= 12 ? 2 : 6), 0, NULL,
                     g_dockBtns[i].label, lstrlenW(g_dockBtns[i].label), NULL);
     }
+
+    /* Atomic BitBlt */
+    BitBlt(hdc, 0, 0, rc.right, rc.bottom, memDC, 0, 0, SRCCOPY);
+
+    SelectObject(memDC, oldBmp);
+    DeleteObject(memBmp);
+    DeleteDC(memDC);
 
     EndPaint(hWnd, &ps);
 }
@@ -561,6 +589,9 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
     case WM_LBUTTONDOWN:
         OnTouch(LOWORD(lParam), HIWORD(lParam));
         return 0;
+
+    case WM_ERASEBKGND:
+        return 1;
 
     case WM_PAINT:
         OnPaint(hWnd);

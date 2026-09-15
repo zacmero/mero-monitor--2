@@ -173,6 +173,19 @@ static void UpdateSystemStatus(void)
     }
 }
 
+/* Hide and disable vendor UI shell window */
+static void HideVendorUI(void)
+{
+    HWND hWndVendor = FindWindowW(NULL, L"Launch");
+    if (!hWndVendor) hWndVendor = FindWindowW(L"Launch", NULL);
+    if (!hWndVendor) hWndVendor = FindWindowW(NULL, L"Main");
+    if (!hWndVendor) hWndVendor = FindWindowW(L"Main", NULL);
+    if (hWndVendor) {
+        ShowWindow(hWndVendor, SW_HIDE);
+        EnableWindow(hWndVendor, FALSE);
+    }
+}
+
 /* Launch an external application */
 static BOOL LaunchApp(const WCHAR *path, BOOL minimizeShell)
 {
@@ -400,11 +413,13 @@ static void UpdateButtons(void)
     }
 }
 
-/* Paint Custom Mero Shell */
+/* Paint Custom Mero Shell (Double Buffered - Zero Blinking) */
 static void OnPaint(HWND hWnd)
 {
     PAINTSTRUCT ps;
     HDC hdc;
+    HDC memDC;
+    HBITMAP memBmp, oldBmp;
     RECT rc;
     WCHAR buf[256];
     int i;
@@ -412,39 +427,43 @@ static void OnPaint(HWND hWnd)
     hdc = BeginPaint(hWnd, &ps);
     GetClientRect(hWnd, &rc);
 
+    memDC = CreateCompatibleDC(hdc);
+    memBmp = CreateCompatibleBitmap(hdc, rc.right, rc.bottom);
+    oldBmp = (HBITMAP)SelectObject(memDC, memBmp);
+
     /* Solid Black Background */
-    FillRect(hdc, &rc, (HBRUSH)GetStockObject(BLACK_BRUSH));
-    SetBkMode(hdc, TRANSPARENT);
+    FillRect(memDC, &rc, (HBRUSH)GetStockObject(BLACK_BRUSH));
+    SetBkMode(memDC, TRANSPARENT);
 
     /* TOP STATUS BAR */
-    SetTextColor(hdc, RGB(0, 255, 128));
+    SetTextColor(memDC, RGB(0, 255, 128));
     wsprintfW(buf, L"MERO // %s [v%s]",
               g_currentPage == 0 ? L"OS SHELL" : L"SYSTEM TOOLS",
               SHELL_VERSION);
-    ExtTextOutW(hdc, 18, 8, 0, NULL, buf, lstrlenW(buf), NULL);
+    ExtTextOutW(memDC, 18, 8, 0, NULL, buf, lstrlenW(buf), NULL);
 
     /* Power / Battery */
     if (g_batteryPercent >= 0) {
-        SetTextColor(hdc, g_batteryPercent < 20 ? RGB(255, 80, 80) : RGB(255, 200, 40));
+        SetTextColor(memDC, g_batteryPercent < 20 ? RGB(255, 80, 80) : RGB(255, 200, 40));
         wsprintfW(buf, L"%s %d%%", g_isAC ? L"[AC]" : L"[BAT]", g_batteryPercent);
     } else {
-        SetTextColor(hdc, RGB(255, 200, 40));
+        SetTextColor(memDC, RGB(255, 200, 40));
         wsprintfW(buf, L"%s", g_isAC ? L"[AC ON]" : L"[BAT]");
     }
-    ExtTextOutW(hdc, 230, 8, 0, NULL, buf, lstrlenW(buf), NULL);
+    ExtTextOutW(memDC, 230, 8, 0, NULL, buf, lstrlenW(buf), NULL);
 
     /* RAM Status */
-    SetTextColor(hdc, RGB(0, 200, 255));
+    SetTextColor(memDC, RGB(0, 200, 255));
     wsprintfW(buf, L"RAM: %luM/%luM", g_memAvailMB, g_memTotalMB);
-    ExtTextOutW(hdc, 340, 8, 0, NULL, buf, lstrlenW(buf), NULL);
+    ExtTextOutW(memDC, 340, 8, 0, NULL, buf, lstrlenW(buf), NULL);
 
     /* Header Divider Line */
     {
         HPEN hPen = CreatePen(PS_SOLID, 1, RGB(40, 90, 60));
-        HPEN hOld = (HPEN)SelectObject(hdc, hPen);
-        MoveToEx(hdc, 18, 26, NULL);
-        LineTo(hdc, g_screenW - 18, 26);
-        SelectObject(hdc, hOld);
+        HPEN hOld = (HPEN)SelectObject(memDC, hPen);
+        MoveToEx(memDC, 18, 26, NULL);
+        LineTo(memDC, g_screenW - 18, 26);
+        SelectObject(memDC, hOld);
         DeleteObject(hPen);
     }
 
@@ -454,50 +473,57 @@ static void OnPaint(HWND hWnd)
     for (i = 0; i < 6; i++) {
         RECT btnRc = g_buttons[i].rc;
         HPEN hPen = CreatePen(PS_SOLID, 1, g_buttons[i].color);
-        HPEN hOld = (HPEN)SelectObject(hdc, hPen);
+        HPEN hOld = (HPEN)SelectObject(memDC, hPen);
 
         /* Draw bounding box */
-        MoveToEx(hdc, btnRc.left, btnRc.top, NULL);
-        LineTo(hdc, btnRc.right, btnRc.top);
-        LineTo(hdc, btnRc.right, btnRc.bottom);
-        LineTo(hdc, btnRc.left, btnRc.bottom);
-        LineTo(hdc, btnRc.left, btnRc.top);
+        MoveToEx(memDC, btnRc.left, btnRc.top, NULL);
+        LineTo(memDC, btnRc.right, btnRc.top);
+        LineTo(memDC, btnRc.right, btnRc.bottom);
+        LineTo(memDC, btnRc.left, btnRc.bottom);
+        LineTo(memDC, btnRc.left, btnRc.top);
 
-        SelectObject(hdc, hOld);
+        SelectObject(memDC, hOld);
         DeleteObject(hPen);
 
         /* Button Title */
-        SetTextColor(hdc, g_buttons[i].color);
-        ExtTextOutW(hdc, btnRc.left + 10, btnRc.top + 7, 0, NULL,
+        SetTextColor(memDC, g_buttons[i].color);
+        ExtTextOutW(memDC, btnRc.left + 10, btnRc.top + 7, 0, NULL,
                    g_buttons[i].title, lstrlenW(g_buttons[i].title), NULL);
 
         /* Button Subtitle */
-        SetTextColor(hdc, RGB(180, 180, 180));
-        ExtTextOutW(hdc, btnRc.left + 10, btnRc.top + 25, 0, NULL,
+        SetTextColor(memDC, RGB(180, 180, 180));
+        ExtTextOutW(memDC, btnRc.left + 10, btnRc.top + 25, 0, NULL,
                    g_buttons[i].sub, lstrlenW(g_buttons[i].sub), NULL);
     }
 
     /* FOOTER STATUS BAR */
     {
         HPEN hPen = CreatePen(PS_SOLID, 1, RGB(30, 60, 40));
-        HPEN hOld = (HPEN)SelectObject(hdc, hPen);
-        MoveToEx(hdc, 18, 202, NULL);
-        LineTo(hdc, g_screenW - 18, 202);
-        SelectObject(hdc, hOld);
+        HPEN hOld = (HPEN)SelectObject(memDC, hPen);
+        MoveToEx(memDC, 18, 202, NULL);
+        LineTo(memDC, g_screenW - 18, 202);
+        SelectObject(memDC, hOld);
         DeleteObject(hPen);
     }
 
     if (g_countdownActive) {
-        SetTextColor(hdc, RGB(255, 220, 40));
+        SetTextColor(memDC, RGB(255, 220, 40));
     } else {
-        SetTextColor(hdc, RGB(140, 180, 160));
+        SetTextColor(memDC, RGB(140, 180, 160));
     }
-    ExtTextOutW(hdc, 18, 212, 0, NULL, g_statusMsg, lstrlenW(g_statusMsg), NULL);
+    ExtTextOutW(memDC, 18, 212, 0, NULL, g_statusMsg, lstrlenW(g_statusMsg), NULL);
 
     /* Footer Hint */
-    SetTextColor(hdc, RGB(90, 120, 100));
+    SetTextColor(memDC, RGB(90, 120, 100));
     wsprintfW(buf, L"Foston FS-460BT // WinCE 5.0 Core // SDMMC: Active // Page %d/2", g_currentPage + 1);
-    ExtTextOutW(hdc, 18, 234, 0, NULL, buf, lstrlenW(buf), NULL);
+    ExtTextOutW(memDC, 18, 234, 0, NULL, buf, lstrlenW(buf), NULL);
+
+    /* Atomic BitBlt to display - zero tearing, zero blinking */
+    BitBlt(hdc, 0, 0, rc.right, rc.bottom, memDC, 0, 0, SRCCOPY);
+
+    SelectObject(memDC, oldBmp);
+    DeleteObject(memBmp);
+    DeleteDC(memDC);
 
     EndPaint(hWnd, &ps);
 }
@@ -580,13 +606,16 @@ static void OnTouch(int x, int y)
                     }
                     break;
 
-                case 1: /* Explorer */
-                    wsprintfW(g_statusMsg, L"Launching Windows Explorer...");
-                    InvalidateRect(g_hWnd, NULL, FALSE);
-                    UpdateWindow(g_hWnd);
-                    if (!LaunchApp(PATH_EXPLORER, TRUE)) {
-                        wsprintfW(g_statusMsg, L"explorer.exe not available on this ROM");
-                        InvalidateRect(g_hWnd, NULL, FALSE);
+                case 1: /* Restore Taskbar & WinCE Desktop */
+                    {
+                        HWND hTaskbar = FindWindowW(L"HHTaskBar", NULL);
+                        if (hTaskbar) {
+                            ShowWindow(hTaskbar, SW_SHOW);
+                            SetWindowPos(hTaskbar, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+                        }
+                        LaunchApp(PATH_EXPLORER, TRUE);
+                        wsprintfW(g_statusMsg, L"Windows CE Desktop & Taskbar restored");
+                        ShowWindow(g_hWnd, SW_MINIMIZE);
                     }
                     break;
 
@@ -635,6 +664,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
 {
     switch (uMsg) {
     case WM_CREATE:
+        HideVendorUI();
         UpdateSystemStatus();
         SetMasterVolume(g_volumeLevel);
         UpdateButtons();
@@ -642,8 +672,14 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         SetTimer(hWnd, TIMER_ID_TICK, 1000, NULL);
         return 0;
 
+    case WM_ERASEBKGND:
+        return 1;
+
     case WM_TIMER:
         if (wParam == TIMER_ID_TICK) {
+            DWORD prevAvail = g_memAvailMB;
+            int prevBat = g_batteryPercent;
+            BOOL prevAC = g_isAC;
             UpdateSystemStatus();
 
             if (g_countdownActive) {
@@ -658,11 +694,13 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
                     UpdateWindow(hWnd);
                     /* Execute preferred */
                     if (g_pref == AUTOLAUNCH_TERMINAL) LaunchApp(PATH_TERMINAL, TRUE);
-                    else if (g_pref == AUTOLAUNCH_GPS) LaunchApp(PATH_GPS, TRUE);
+                    else if (g_pref == AUTOLAUNCH_GPS) LaunchApp(PATH_CMD, TRUE);
                     else if (g_pref == AUTOLAUNCH_PROBE) LaunchApp(PATH_PROBE, TRUE);
                 }
+                InvalidateRect(hWnd, NULL, FALSE);
+            } else if (g_memAvailMB != prevAvail || g_batteryPercent != prevBat || g_isAC != prevAC) {
+                InvalidateRect(hWnd, NULL, FALSE);
             }
-            InvalidateRect(hWnd, NULL, FALSE);
         }
         return 0;
 

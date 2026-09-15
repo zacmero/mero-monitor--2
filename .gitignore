@@ -9,3 +9,4 @@
 *.log
 probe.txt
 .DS_Store
+.serena/
