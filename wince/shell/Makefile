@@ -9,7 +9,7 @@ CC_LOCAL    := $(shell which arm-mingw32ce-gcc 2>/dev/null)
 
 CFLAGS      := -O2 -Wall -Wextra -D_WIN32_WCE=0x0400 -DUNICODE -D_UNICODE
 LDFLAGS     := -Wl,--subsystem,windows -s
-LIBS        := -lcoredll
+LIBS        := -ltoolhelp -lcoredll
 
 .PHONY: all clean
 

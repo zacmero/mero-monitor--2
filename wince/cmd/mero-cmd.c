@@ -175,6 +175,18 @@ static void CmdPs(void)
     TermPrint(line);
 }
 
+static BOOL CALLBACK EnumHideVendorWindowsProc(HWND hWnd, LPARAM lParam)
+{
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hWnd, &pid);
+    if (pid == (DWORD)lParam) {
+        ShowWindow(hWnd, SW_HIDE);
+        EnableWindow(hWnd, FALSE);
+        PostMessage(hWnd, WM_CLOSE, 0, 0);
+    }
+    return TRUE;
+}
+
 /* Command: kill Launch.exe */
 static void CmdKillLaunch(void)
 {
@@ -182,7 +194,7 @@ static void CmdKillLaunch(void)
     PROCESSENTRY32 pe;
     BOOL found = FALSE;
 
-    /* First hide any vendor window immediately */
+    /* Generic fallback window search */
     HWND hWndVendor = FindWindowW(NULL, L"Launch");
     if (!hWndVendor) hWndVendor = FindWindowW(L"Launch", NULL);
     if (!hWndVendor) hWndVendor = FindWindowW(NULL, L"Main");
@@ -203,7 +215,12 @@ static void CmdKillLaunch(void)
     if (Process32First(hSnap, &pe)) {
         do {
             if (_wcsicmp(pe.szExeFile, L"Launch.exe") == 0 ||
-                _wcsicmp(pe.szExeFile, L"Main.exe") == 0) {
+                _wcsicmp(pe.szExeFile, L"Main.exe") == 0 ||
+                _wcsicmp(pe.szExeFile, L"YFMenu.exe") == 0) {
+                
+                /* Hide and close all windows belonging to this PID */
+                EnumWindows(EnumHideVendorWindowsProc, (LPARAM)pe.th32ProcessID);
+
                 HANDLE hProc = OpenProcess(0x0001 /* PROCESS_TERMINATE */, FALSE, pe.th32ProcessID);
                 WCHAR line[128];
                 if (hProc) {
@@ -221,7 +238,6 @@ static void CmdKillLaunch(void)
                     TermPrint(line);
                 }
                 found = TRUE;
-                break;
             }
         } while (Process32Next(hSnap, &pe));
     }
@@ -516,15 +532,22 @@ static void HandleCommand(int cmdId)
         break;
     case CMD_ID_EXPLORER:
         {
-            PROCESS_INFORMATION pi;
-            memset(&pi, 0, sizeof(pi));
-            if (CreateProcessW(L"\\Windows\\explorer.exe", NULL, NULL, NULL, FALSE, 0, NULL, NULL, NULL, &pi)) {
-                CloseHandle(pi.hProcess);
-                CloseHandle(pi.hThread);
-                ShowWindow(g_hWnd, SW_MINIMIZE);
-            } else {
-                TermPrint(L"[!] Failed to launch explorer.exe");
+            HWND hTaskbar = FindWindowW(L"HHTaskBar", NULL);
+            if (!hTaskbar) {
+                PROCESS_INFORMATION pi;
+                memset(&pi, 0, sizeof(pi));
+                if (CreateProcessW(L"\\Windows\\explorer.exe", NULL, NULL, NULL, FALSE, 0, NULL, NULL, NULL, &pi)) {
+                    CloseHandle(pi.hProcess);
+                    CloseHandle(pi.hThread);
+                }
+                Sleep(400);
+                hTaskbar = FindWindowW(L"HHTaskBar", NULL);
             }
+            if (hTaskbar) {
+                ShowWindow(hTaskbar, SW_SHOW);
+                SetWindowPos(hTaskbar, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+            }
+            ShowWindow(g_hWnd, SW_MINIMIZE);
         }
         break;
     case CMD_ID_CONTROL:

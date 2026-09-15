@@ -6,12 +6,13 @@
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <tlhelp32.h>
 #include <mmsystem.h>
 #include <tchar.h>
 #include <stdio.h>
 #include <string.h>
 
-#define SHELL_VERSION       L"0.2.0"
+#define SHELL_VERSION       L"0.2.3"
 #define TIMER_ID_TICK       1
 
 #define CFG_DIR             L"\\SDMMC\\MERO"
@@ -173,9 +174,25 @@ static void UpdateSystemStatus(void)
     }
 }
 
-/* Hide and disable vendor UI shell window */
-static void HideVendorUI(void)
+static BOOL CALLBACK EnumHideVendorWindowsProc(HWND hWnd, LPARAM lParam)
 {
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hWnd, &pid);
+    if (pid == (DWORD)lParam) {
+        ShowWindow(hWnd, SW_HIDE);
+        EnableWindow(hWnd, FALSE);
+        PostMessage(hWnd, WM_CLOSE, 0, 0);
+    }
+    return TRUE;
+}
+
+/* Hide and terminate vendor UI launcher completely */
+static void SuppressAndKillVendorUI(void)
+{
+    HANDLE hSnap;
+    PROCESSENTRY32 pe;
+
+    /* Fallback window class/title search */
     HWND hWndVendor = FindWindowW(NULL, L"Launch");
     if (!hWndVendor) hWndVendor = FindWindowW(L"Launch", NULL);
     if (!hWndVendor) hWndVendor = FindWindowW(NULL, L"Main");
@@ -183,6 +200,67 @@ static void HideVendorUI(void)
     if (hWndVendor) {
         ShowWindow(hWndVendor, SW_HIDE);
         EnableWindow(hWndVendor, FALSE);
+    }
+
+    /* PID-based window hiding and process termination */
+    hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (hSnap != INVALID_HANDLE_VALUE) {
+        pe.dwSize = sizeof(pe);
+        if (Process32First(hSnap, &pe)) {
+            do {
+                if (_wcsicmp(pe.szExeFile, L"Launch.exe") == 0 ||
+                    _wcsicmp(pe.szExeFile, L"Main.exe") == 0 ||
+                    _wcsicmp(pe.szExeFile, L"YFMenu.exe") == 0) {
+                    
+                    EnumWindows(EnumHideVendorWindowsProc, (LPARAM)pe.th32ProcessID);
+
+                    HANDLE hProc = OpenProcess(0x0001 /* PROCESS_TERMINATE */, FALSE, pe.th32ProcessID);
+                    if (hProc) {
+                        TerminateProcess(hProc, 0);
+                        CloseHandle(hProc);
+                    }
+                }
+            } while (Process32Next(hSnap, &pe));
+        }
+        CloseHandle(hSnap);
+    }
+}
+
+static BOOL CALLBACK EnumMinimizeAllProc(HWND hWnd, LPARAM lParam)
+{
+    (void)lParam;
+    WCHAR cls[64];
+    if (IsWindowVisible(hWnd) && hWnd != g_hWnd) {
+        GetClassNameW(hWnd, cls, sizeof(cls) / sizeof(cls[0]));
+        if (_wcsicmp(cls, L"HHTaskBar") != 0 && _wcsicmp(cls, L"DesktopExplorerWindow") != 0) {
+            ShowWindow(hWnd, SW_MINIMIZE);
+        }
+    }
+    return TRUE;
+}
+
+/* Forward declaration */
+static BOOL LaunchApp(const WCHAR *path, BOOL minimizeShell);
+
+/* Expose Windows CE Desktop & Taskbar cleanly */
+static void ShowDesktop(void)
+{
+    HWND hTaskbar = FindWindowW(L"HHTaskBar", NULL);
+    if (!hTaskbar) {
+        /* Explorer shell not started yet; launch it to create desktop & taskbar */
+        LaunchApp(PATH_EXPLORER, FALSE);
+        Sleep(400);
+        hTaskbar = FindWindowW(L"HHTaskBar", NULL);
+    }
+    if (hTaskbar) {
+        ShowWindow(hTaskbar, SW_SHOW);
+        SetWindowPos(hTaskbar, HWND_TOPMOST, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+    }
+    /* Minimize all open application windows to reveal desktop */
+    EnumWindows(EnumMinimizeAllProc, 0);
+    if (g_hWnd) {
+        ShowWindow(g_hWnd, SW_MINIMIZE);
     }
 }
 
@@ -378,8 +456,8 @@ static void UpdateButtons(void)
         lstrcpyW(g_buttons[4].sub,   L"Explorer, Volume, Discovery Dump");
         g_buttons[4].color = RGB(120, 200, 255);
 
-        lstrcpyW(g_buttons[5].title, L"[6] EXIT TO WINCE");
-        lstrcpyW(g_buttons[5].sub,   L"Return to Device Desktop");
+        lstrcpyW(g_buttons[5].title, L"[6] EXIT TO DESKTOP");
+        lstrcpyW(g_buttons[5].sub,   L"Leave Shell & Show WinCE Desktop");
         g_buttons[5].color = RGB(255, 80, 80);
     } else {
         /* PAGE 1: System Tools & Hardware Options */
@@ -387,12 +465,12 @@ static void UpdateButtons(void)
         lstrcpyW(g_buttons[0].sub,   L"Launch Windows CE Control Panel");
         g_buttons[0].color = RGB(0, 220, 255);
 
-        lstrcpyW(g_buttons[1].title, L"[2] WINCE EXPLORER");
-        lstrcpyW(g_buttons[1].sub,   L"Browse ResidentFlash & Files");
+        lstrcpyW(g_buttons[1].title, L"[2] SHOW DESKTOP");
+        lstrcpyW(g_buttons[1].sub,   L"Reveal Taskbar & Minimize Windows");
         g_buttons[1].color = RGB(0, 255, 128);
 
-        lstrcpyW(g_buttons[2].title, L"[3] BLUETOOTH TOOL");
-        lstrcpyW(g_buttons[2].sub,   L"Launch Bluetooth Manager");
+        lstrcpyW(g_buttons[2].title, L"[3] FILE EXPLORER");
+        lstrcpyW(g_buttons[2].sub,   L"Browse ResidentFlash & Files");
         g_buttons[2].color = RGB(100, 180, 255);
 
         {
@@ -589,7 +667,8 @@ static void OnTouch(int x, int y)
                     InvalidateRect(g_hWnd, NULL, FALSE);
                     break;
 
-                case 5: /* Exit to WinCE */
+                case 5: /* Exit to WinCE Desktop */
+                    ShowDesktop();
                     DestroyWindow(g_hWnd);
                     break;
                 }
@@ -607,27 +686,16 @@ static void OnTouch(int x, int y)
                     break;
 
                 case 1: /* Restore Taskbar & WinCE Desktop */
-                    {
-                        HWND hTaskbar = FindWindowW(L"HHTaskBar", NULL);
-                        if (hTaskbar) {
-                            ShowWindow(hTaskbar, SW_SHOW);
-                            SetWindowPos(hTaskbar, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
-                        }
-                        LaunchApp(PATH_EXPLORER, TRUE);
-                        wsprintfW(g_statusMsg, L"Windows CE Desktop & Taskbar restored");
-                        ShowWindow(g_hWnd, SW_MINIMIZE);
-                    }
+                    ShowDesktop();
+                    wsprintfW(g_statusMsg, L"Windows CE Desktop & Taskbar restored");
                     break;
 
-                case 2: /* Bluetooth Manager */
-                    wsprintfW(g_statusMsg, L"Searching for Bluetooth utility...");
+                case 2: /* File Explorer */
+                    wsprintfW(g_statusMsg, L"Launching Windows File Explorer...");
                     InvalidateRect(g_hWnd, NULL, FALSE);
                     UpdateWindow(g_hWnd);
-                    /* Try common WinCE Bluetooth managers */
-                    if (!LaunchApp(L"\\Windows\\bthelp.exe", TRUE) &&
-                        !LaunchApp(L"\\Windows\\btpan.exe", TRUE) &&
-                        !LaunchApp(L"\\ResidentFlash\\Bluetooth\\BlueTooth.exe", TRUE)) {
-                        wsprintfW(g_statusMsg, L"BT app path pending system scan");
+                    if (!LaunchApp(PATH_EXPLORER, TRUE)) {
+                        wsprintfW(g_statusMsg, L"explorer.exe not found");
                         InvalidateRect(g_hWnd, NULL, FALSE);
                     }
                     break;
@@ -664,7 +732,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
 {
     switch (uMsg) {
     case WM_CREATE:
-        HideVendorUI();
+        SuppressAndKillVendorUI();
         UpdateSystemStatus();
         SetMasterVolume(g_volumeLevel);
         UpdateButtons();
