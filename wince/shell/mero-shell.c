@@ -471,6 +471,34 @@ static BOOL LaunchApp(const WCHAR *path, BOOL exitShell)
     return ret;
 }
 
+/* Restore or launch factory vendor UI (Launch.exe) */
+static void LaunchVendorUI(void)
+{
+    HWND hWndVendor = FindWindowW(NULL, L"Launch");
+    if (!hWndVendor) hWndVendor = FindWindowW(L"Launch", NULL);
+    if (!hWndVendor) hWndVendor = FindWindowW(NULL, L"Main");
+    if (!hWndVendor) hWndVendor = FindWindowW(L"Main", NULL);
+    if (hWndVendor) {
+        EnableWindow(hWndVendor, TRUE);
+        ShowWindow(hWndVendor, SW_SHOWNORMAL);
+        SetForegroundWindow(hWndVendor);
+        if (g_hWnd) {
+            DestroyWindow(g_hWnd);
+        }
+        return;
+    }
+
+    /* Process not running; spawn directly from Windows folder */
+    if (!LaunchApp(L"\\Windows\\Launch.exe", TRUE)) {
+        if (!LaunchApp(L"\\Windows\\Main.exe", TRUE)) {
+            if (!LaunchApp(L"\\Windows\\YFMenu.exe", TRUE)) {
+                wsprintfW(g_statusMsg, L"Vendor UI binary not found in \\Windows");
+                InvalidateRect(g_hWnd, NULL, FALSE);
+            }
+        }
+    }
+}
+
 static void DumpLaunchStrings(void);
 
 /* Perform a deep hardware & system discovery scan to SD card */
@@ -714,9 +742,9 @@ static void UpdateButtons(void)
         lstrcpyW(g_buttons[0].sub,   g_bootTargetNames[g_bootTarget]);
         g_buttons[0].color = RGB(0, 255, 128);
 
-        lstrcpyW(g_buttons[1].title, L"[2] SHOW DESKTOP");
-        lstrcpyW(g_buttons[1].sub,   L"Hide Shell & Reveal WinCE Desktop");
-        g_buttons[1].color = RGB(0, 220, 255);
+        lstrcpyW(g_buttons[1].title, L"[2] VENDOR GPS UI");
+        lstrcpyW(g_buttons[1].sub,   L"Launch Factory Foston Interface");
+        g_buttons[1].color = RGB(255, 140, 40);
 
         {
             WCHAR volBuf[32];
@@ -937,9 +965,11 @@ static void OnTouch(int x, int y)
                     InvalidateRect(g_hWnd, NULL, FALSE);
                     break;
 
-                case 1: /* Restore Taskbar & WinCE Desktop */
-                    ShowDesktop();
-                    wsprintfW(g_statusMsg, L"Windows CE Desktop revealed (shortcuts created)");
+                case 1: /* Launch Original Vendor UI */
+                    wsprintfW(g_statusMsg, L"Launching Factory Vendor UI (Launch.exe)...");
+                    InvalidateRect(g_hWnd, NULL, FALSE);
+                    UpdateWindow(g_hWnd);
+                    LaunchVendorUI();
                     break;
 
                 case 2: /* Volume Toggle */
