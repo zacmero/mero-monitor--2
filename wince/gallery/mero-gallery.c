@@ -68,10 +68,10 @@ static int          g_imgOriginalH = 0;
 static BOOL         g_hasImage = FALSE;
 
 static BOOL         g_isPlaying = TRUE;
-static int          g_intervalSec = 5;
-static const int    g_intervalOptions[] = { 3, 5, 10, 30, 60 };
-static const int    g_intervalOptionCount = 5;
-static int          g_intervalOptIdx = 1; /* Default 5s */
+static int          g_intervalSec = 3;
+static const int    g_intervalOptions[] = { 1, 2, 3, 5, 10, 30 };
+static const int    g_intervalOptionCount = 6;
+static int          g_intervalOptIdx = 2; /* Default 3s */
 
 static FitMode      g_fitMode = FIT_ASPECT;
 static BOOL         g_osdVisible = TRUE;
@@ -151,6 +151,7 @@ static void DiscoverFolders(void)
     g_folderCount = 0;
 
     /* 1. Standard Presets */
+    AddFolderIfValid(L"\\SDMMC\\Stream", L"SDMMC: Host Stream");
     AddFolderIfValid(L"\\SDMMC\\Pictures", L"SDMMC: Pictures");
     AddFolderIfValid(L"\\SDMMC\\Gallery", L"SDMMC: Gallery");
     AddFolderIfValid(L"\\SDMMC\\Suzy", L"SDMMC: Suzy");
@@ -165,6 +166,7 @@ static void DiscoverFolders(void)
             if ((wfd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
                 wcscmp(wfd.cFileName, L".") != 0 &&
                 wcscmp(wfd.cFileName, L"..") != 0 &&
+                _wcsicmp(wfd.cFileName, L"Stream") != 0 &&
                 _wcsicmp(wfd.cFileName, L"Pictures") != 0 &&
                 _wcsicmp(wfd.cFileName, L"Gallery") != 0 &&
                 _wcsicmp(wfd.cFileName, L"Suzy") != 0 &&
@@ -663,6 +665,7 @@ static void OnTouch(int x, int y)
             return;
         }
         if (PtInRect(&g_rcBtnFolder, pt)) {
+            DiscoverFolders();
             g_folderDialogOpen = TRUE;
             InvalidateRect(g_hWnd, NULL, FALSE);
             return;
@@ -747,9 +750,20 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
 
     case WM_TIMER:
         if (wParam == TIMER_ID_SLIDESHOW) {
-            if (g_isPlaying && !g_folderDialogOpen && g_fileCount > 1) {
-                g_currentFileIdx = (g_currentFileIdx + 1) % g_fileCount;
-                LoadCurrentImage();
+            if (g_isPlaying && !g_folderDialogOpen) {
+                if (g_fileCount > 0) {
+                    int prevIdx = g_currentFileIdx;
+                    g_currentFileIdx = (g_currentFileIdx + 1) % g_fileCount;
+                    if (g_currentFileIdx == 0 && prevIdx > 0) {
+                        /* Looped back to start: re-scan folder to pick up any new files streamed from host */
+                        ScanActiveFolder();
+                    } else {
+                        LoadCurrentImage();
+                    }
+                } else {
+                    /* Empty folder: re-scan periodically in case stream drops new files */
+                    ScanActiveFolder();
+                }
             }
         } else if (wParam == TIMER_ID_OSD_HIDE) {
             if (!g_folderDialogOpen) {
