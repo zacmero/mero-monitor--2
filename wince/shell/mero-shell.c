@@ -27,6 +27,7 @@ extern BOOL WINAPI SetCleanRebootFlag(void);
 #define CFG_FILE            L"\\SDMMC\\MERO\\shell.cfg"
 #define DUMP_FILE           L"\\SDMMC\\MERO\\system_dump.txt"
 
+#define PATH_GALLERY        L"\\SDMMC\\MERO\\mero-gallery.exe"
 #define PATH_TERMINAL       L"\\SDMMC\\MERO\\mero-terminal.exe"
 #define PATH_PROBE          L"\\SDMMC\\MERO\\mero-probe.exe"
 #define PATH_CMD            L"\\SDMMC\\MERO\\mero-cmd.exe"
@@ -53,16 +54,16 @@ static const WCHAR   *g_bootTargetNames[] = {
 
 typedef enum {
     AUTOLAUNCH_NONE = 0,
-    AUTOLAUNCH_TERMINAL = 1,
-    AUTOLAUNCH_GPS = 2,
+    AUTOLAUNCH_GALLERY = 1,
+    AUTOLAUNCH_CMD = 2,
     AUTOLAUNCH_PROBE = 3,
     AUTOLAUNCH_COUNT = 4
 } AutoLaunchPref;
 
 static const WCHAR *g_prefNames[] = {
     L"NONE (Direct Shell)",
-    L"THOUGHT TERMINAL",
-    L"GPS MONITOR",
+    L"MEDIA VISUALIZER",
+    L"MERO CMD SHELL",
     L"HARDWARE PROBE"
 };
 
@@ -713,8 +714,8 @@ static void UpdateButtons(void)
 
     if (g_currentPage == 0) {
         /* PAGE 0: Mero Applications */
-        lstrcpyW(g_buttons[0].title, L"[1] THOUGHT TERMINAL");
-        lstrcpyW(g_buttons[0].sub,   L"Mero Mind / Artifact Stream");
+        lstrcpyW(g_buttons[0].title, L"[1] MEDIA VISUALIZER");
+        lstrcpyW(g_buttons[0].sub,   L"Living Picture Frame & Gallery");
         g_buttons[0].color = RGB(0, 255, 128);
 
         lstrcpyW(g_buttons[1].title, L"[2] MERO CMD SHELL");
@@ -907,12 +908,12 @@ static void OnTouch(int x, int y)
             if (g_currentPage == 0) {
                 /* PAGE 0 ACTIONS */
                 switch (i) {
-                case 0: /* Thought Terminal */
-                    wsprintfW(g_statusMsg, L"Launching Thought Terminal...");
+                case 0: /* Media Visualizer */
+                    wsprintfW(g_statusMsg, L"Launching Media Visualizer...");
                     InvalidateRect(g_hWnd, NULL, FALSE);
                     UpdateWindow(g_hWnd);
-                    if (!LaunchApp(PATH_TERMINAL, TRUE)) {
-                        wsprintfW(g_statusMsg, L"Terminal binary pending: %s", PATH_TERMINAL);
+                    if (!LaunchApp(PATH_GALLERY, TRUE)) {
+                        wsprintfW(g_statusMsg, L"Gallery binary not found: %s", PATH_GALLERY);
                         InvalidateRect(g_hWnd, NULL, FALSE);
                     }
                     break;
@@ -1029,9 +1030,11 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
                 CreateDirectoryW(L"\\ResidentFlash\\MERO", NULL);
                 CopyFileW(L"\\SDMMC\\MERO\\mero-shell.exe", L"\\ResidentFlash\\MERO\\mero-shell.exe", FALSE);
                 CopyFileW(L"\\SDMMC\\MERO\\mero-cmd.exe", L"\\ResidentFlash\\MERO\\mero-cmd.exe", FALSE);
+                CopyFileW(L"\\SDMMC\\MERO\\mero-gallery.exe", L"\\ResidentFlash\\MERO\\mero-gallery.exe", FALSE);
                 CopyFileW(L"\\SDMMC\\MERO\\mero-flash.exe", L"\\ResidentFlash\\MERO\\mero-flash.exe", FALSE);
                 CopyFileW(L"\\SDMMC\\MERO\\mero-shell.ico", L"\\ResidentFlash\\MERO\\mero-shell.ico", FALSE);
                 CopyFileW(L"\\SDMMC\\MERO\\mero-cmd.ico", L"\\ResidentFlash\\MERO\\mero-cmd.ico", FALSE);
+                CopyFileW(L"\\SDMMC\\MERO\\mero-gallery.ico", L"\\ResidentFlash\\MERO\\mero-gallery.ico", FALSE);
                 CopyFileW(L"\\SDMMC\\MERO\\mero-flash.ico", L"\\ResidentFlash\\MERO\\mero-flash.ico", FALSE);
             }
         }
@@ -1060,8 +1063,8 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
                     InvalidateRect(hWnd, NULL, FALSE);
                     UpdateWindow(hWnd);
                     /* Execute preferred */
-                    if (g_pref == AUTOLAUNCH_TERMINAL) LaunchApp(PATH_TERMINAL, TRUE);
-                    else if (g_pref == AUTOLAUNCH_GPS) LaunchApp(PATH_CMD, TRUE);
+                    if (g_pref == AUTOLAUNCH_GALLERY) LaunchApp(PATH_GALLERY, TRUE);
+                    else if (g_pref == AUTOLAUNCH_CMD) LaunchApp(PATH_CMD, TRUE);
                     else if (g_pref == AUTOLAUNCH_PROBE) LaunchApp(PATH_PROBE, TRUE);
                 }
                 InvalidateRect(hWnd, NULL, FALSE);
