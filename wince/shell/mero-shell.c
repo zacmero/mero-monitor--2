@@ -1021,6 +1021,20 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         if (GetFileAttributesW(L"\\SDMMC\\MERO\\launch_strings.txt") == 0xFFFFFFFF) {
             PerformSystemDump();
         }
+        /* Auto-sync: If running from SDMMC, keep ResidentFlash updated in background */
+        {
+            WCHAR myPath[MAX_PATH];
+            GetModuleFileNameW(g_hInstance, myPath, MAX_PATH);
+            if (wcsstr(myPath, L"SDMMC") || wcsstr(myPath, L"sdmmc")) {
+                CreateDirectoryW(L"\\ResidentFlash\\MERO", NULL);
+                CopyFileW(L"\\SDMMC\\MERO\\mero-shell.exe", L"\\ResidentFlash\\MERO\\mero-shell.exe", FALSE);
+                CopyFileW(L"\\SDMMC\\MERO\\mero-cmd.exe", L"\\ResidentFlash\\MERO\\mero-cmd.exe", FALSE);
+                CopyFileW(L"\\SDMMC\\MERO\\mero-flash.exe", L"\\ResidentFlash\\MERO\\mero-flash.exe", FALSE);
+                CopyFileW(L"\\SDMMC\\MERO\\mero-shell.ico", L"\\ResidentFlash\\MERO\\mero-shell.ico", FALSE);
+                CopyFileW(L"\\SDMMC\\MERO\\mero-cmd.ico", L"\\ResidentFlash\\MERO\\mero-cmd.ico", FALSE);
+                CopyFileW(L"\\SDMMC\\MERO\\mero-flash.ico", L"\\ResidentFlash\\MERO\\mero-flash.ico", FALSE);
+            }
+        }
         SetTimer(hWnd, TIMER_ID_TICK, 1000, NULL);
         return 0;
 
@@ -1091,6 +1105,23 @@ int WINAPI WinMain(
     g_hInstance = hInstance;
     g_screenW = GetSystemMetrics(SM_CXSCREEN);
     g_screenH = GetSystemMetrics(SM_CYSCREEN);
+
+    /* Chainloader: If running from ResidentFlash, hand off to SDMMC if present */
+    {
+        WCHAR myPath[MAX_PATH];
+        GetModuleFileNameW(hInstance, myPath, MAX_PATH);
+        if (wcsstr(myPath, L"ResidentFlash") || wcsstr(myPath, L"residentflash")) {
+            if (GetFileAttributesW(L"\\SDMMC\\MERO\\mero-shell.exe") != 0xFFFFFFFF) {
+                PROCESS_INFORMATION pi;
+                memset(&pi, 0, sizeof(pi));
+                if (CreateProcessW(L"\\SDMMC\\MERO\\mero-shell.exe", NULL, NULL, NULL, FALSE, 0, NULL, NULL, NULL, &pi)) {
+                    CloseHandle(pi.hProcess);
+                    CloseHandle(pi.hThread);
+                    return 0; /* Handed off to SDMMC! */
+                }
+            }
+        }
+    }
 
     /* Single instance check: if shell already running (e.g. hidden for desktop), restore it */
     HWND hExisting = FindWindowW(L"MeroShellWndClass", L"Mero Shell");
