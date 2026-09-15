@@ -261,11 +261,14 @@ static void CreateDesktopShortcuts(void)
 {
     HANDLE hFile;
     DWORD written;
-    const char *lnkShell = "26#\\SDMMC\\MERO\\mero-shell.exe?\\SDMMC\\MERO\\mero-shell.ico,0";
-    const char *lnkCmd   = "24#\\SDMMC\\MERO\\mero-cmd.exe?\\SDMMC\\MERO\\mero-cmd.ico,0";
-    const char *lnkFlash = "34#\\ResidentFlash\\MERO\\mero-shell.exe?\\ResidentFlash\\MERO\\mero-flash.ico,0";
+    const char *lnkShell = "26#\\SDMMC\\MERO\\mero-shell.exe";
+    const char *lnkCmd   = "24#\\SDMMC\\MERO\\mero-cmd.exe";
+    const char *lnkFlash = "34#\\ResidentFlash\\MERO\\mero-flash.exe";
 
     CreateDirectoryW(L"\\ResidentFlash\\MERO", NULL);
+    CopyFileW(L"\\SDMMC\\MERO\\mero-shell.exe", L"\\ResidentFlash\\MERO\\mero-shell.exe", FALSE);
+    CopyFileW(L"\\SDMMC\\MERO\\mero-cmd.exe", L"\\ResidentFlash\\MERO\\mero-cmd.exe", FALSE);
+    CopyFileW(L"\\SDMMC\\MERO\\mero-flash.exe", L"\\ResidentFlash\\MERO\\mero-flash.exe", FALSE);
     CopyFileW(L"\\SDMMC\\MERO\\mero-shell.ico", L"\\ResidentFlash\\MERO\\mero-shell.ico", FALSE);
     CopyFileW(L"\\SDMMC\\MERO\\mero-cmd.ico", L"\\ResidentFlash\\MERO\\mero-cmd.ico", FALSE);
     CopyFileW(L"\\SDMMC\\MERO\\mero-flash.ico", L"\\ResidentFlash\\MERO\\mero-flash.ico", FALSE);
@@ -334,6 +337,7 @@ static BOOL ApplyBootTarget(BootTarget target)
         CreateDirectoryW(L"\\ResidentFlash\\MERO", NULL);
         CopyFileW(L"\\SDMMC\\MERO\\mero-shell.exe", L"\\ResidentFlash\\MERO\\mero-shell.exe", FALSE);
         CopyFileW(L"\\SDMMC\\MERO\\mero-cmd.exe", L"\\ResidentFlash\\MERO\\mero-cmd.exe", FALSE);
+        CopyFileW(L"\\SDMMC\\MERO\\mero-flash.exe", L"\\ResidentFlash\\MERO\\mero-flash.exe", FALSE);
         CopyFileW(L"\\SDMMC\\MERO\\mero-shell.ico", L"\\ResidentFlash\\MERO\\mero-shell.ico", FALSE);
         CopyFileW(L"\\SDMMC\\MERO\\mero-cmd.ico", L"\\ResidentFlash\\MERO\\mero-cmd.ico", FALSE);
         CopyFileW(L"\\SDMMC\\MERO\\mero-flash.ico", L"\\ResidentFlash\\MERO\\mero-flash.ico", FALSE);
