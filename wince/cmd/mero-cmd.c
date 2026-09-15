@@ -11,10 +11,16 @@
 #include <stdio.h>
 #include <string.h>
 
-#define CMD_VERSION         L"0.1.0"
+#define CMD_VERSION         L"0.1.3"
 #define MAX_LINES           120
 #define LINE_LEN            128
 #define LINES_PER_SCREEN    11
+
+#define IOCTL_HAL_REBOOT    0x0001003C
+#define POWER_STATE_RESET   0x00800000
+
+extern BOOL WINAPI KernelIoControl(DWORD dwIoControlCode, LPVOID lpInBuf, DWORD nInBufSize, LPVOID lpOutBuf, DWORD nOutBufSize, LPDWORD lpBytesReturned);
+extern DWORD WINAPI SetSystemPowerState(LPCWSTR pwsState, DWORD StateFlags, DWORD Options);
 
 typedef struct {
     RECT rc;
@@ -29,9 +35,9 @@ enum {
     CMD_ID_MEM,
     CMD_ID_PS,
     CMD_ID_KILL_LAUNCH,
-    CMD_ID_REG_INIT,
-    CMD_ID_CAT_DUMP,
-    CMD_ID_CAT_PROBE,
+    CMD_ID_WINLIST,
+    CMD_ID_DESKTOP,
+    CMD_ID_REBOOT,
     CMD_ID_EXPLORER,
     CMD_ID_CONTROL,
     CMD_ID_CLEAR,
@@ -175,77 +181,268 @@ static void CmdPs(void)
     TermPrint(line);
 }
 
-static BOOL CALLBACK EnumHideVendorWindowsProc(HWND hWnd, LPARAM lParam)
+/* Window enumeration callback: inspect and save all windows */
+static BOOL CALLBACK CmdDumpAllWindowsProc(HWND hWnd, LPARAM lParam)
 {
+    HANDLE hFile = (HANDLE)lParam;
+    WCHAR title[64];
+    WCHAR className[64];
+    RECT rc;
     DWORD pid = 0;
+    char line[256];
+    WCHAR wline[128];
+    BOOL isVis;
+
+    title[0] = 0;
+    className[0] = 0;
+    GetWindowTextW(hWnd, title, 64);
+    GetClassNameW(hWnd, className, 64);
+    GetWindowRect(hWnd, &rc);
     GetWindowThreadProcessId(hWnd, &pid);
-    if (pid == (DWORD)lParam) {
-        ShowWindow(hWnd, SW_HIDE);
-        EnableWindow(hWnd, FALSE);
-        PostMessage(hWnd, WM_CLOSE, 0, 0);
+    isVis = IsWindowVisible(hWnd);
+
+    WCHAR procName[32];
+    wcscpy(procName, L"Unknown");
+    HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (hSnap != INVALID_HANDLE_VALUE) {
+        PROCESSENTRY32 pe;
+        pe.dwSize = sizeof(pe);
+        if (Process32First(hSnap, &pe)) {
+            do {
+                if (pe.th32ProcessID == pid) {
+                    wcsncpy(procName, pe.szExeFile, 31);
+                    break;
+                }
+            } while (Process32Next(hSnap, &pe));
+        }
+        CloseHandle(hSnap);
+    }
+
+    /* Print to terminal */
+    wsprintfW(wline, L"  0x%08X [%s] %s \"%s\"",
+              (unsigned int)hWnd, isVis ? L"V" : L"H", procName, title[0] ? title : className);
+    TermPrint(wline);
+
+    /* Write to file */
+    if (hFile != INVALID_HANDLE_VALUE) {
+        DWORD written;
+        snprintf(line, sizeof(line),
+            "HWND: 0x%08X | PID: 0x%08X (%ls) | Rect: [%d,%d-%d,%d] | Vis: %s | Class: \"%ls\" | Title: \"%ls\"\r\n",
+            (unsigned int)hWnd, (unsigned int)pid, procName,
+            rc.left, rc.top, rc.right, rc.bottom,
+            isVis ? "YES" : "NO",
+            className, title);
+        WriteFile(hFile, line, (DWORD)strlen(line), &written, NULL);
     }
     return TRUE;
 }
 
-/* Command: kill Launch.exe */
-static void CmdKillLaunch(void)
+static void CmdWinList(void)
 {
-    HANDLE hSnap;
-    PROCESSENTRY32 pe;
-    BOOL found = FALSE;
+    HANDLE hFile;
+    DWORD written;
 
-    /* Generic fallback window search */
-    HWND hWndVendor = FindWindowW(NULL, L"Launch");
-    if (!hWndVendor) hWndVendor = FindWindowW(L"Launch", NULL);
-    if (!hWndVendor) hWndVendor = FindWindowW(NULL, L"Main");
-    if (!hWndVendor) hWndVendor = FindWindowW(L"Main", NULL);
-    if (hWndVendor) {
-        ShowWindow(hWndVendor, SW_HIDE);
-        EnableWindow(hWndVendor, FALSE);
-        TermPrint(L"[KILL] Hid vendor UI window from display!");
+    TermPrint(L"[WINDOW LIST]");
+    hFile = CreateFileW(
+        L"\\SDMMC\\MERO\\window_dump.txt",
+        GENERIC_WRITE,
+        FILE_SHARE_READ,
+        NULL,
+        CREATE_ALWAYS,
+        FILE_ATTRIBUTE_NORMAL,
+        NULL
+    );
+
+    if (hFile != INVALID_HANDLE_VALUE) {
+        const char *hdr = "=== MERO MONITOR #2: LIVE WINDOWS ===\r\n";
+        WriteFile(hFile, hdr, (DWORD)strlen(hdr), &written, NULL);
     }
 
-    hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    if (hSnap == INVALID_HANDLE_VALUE) {
-        TermPrint(L"[KILL] Failed to create process snapshot");
-        return;
+    EnumWindows(CmdDumpAllWindowsProc, (LPARAM)hFile);
+
+    if (hFile != INVALID_HANDLE_VALUE) {
+        CloseHandle(hFile);
+        TermPrint(L"  (Saved to \\SDMMC\\MERO\\window_dump.txt)");
+    }
+}
+
+/* Universal fullscreen suppressor: hides ANY window covering the screen that isn't shell or desktop */
+static BOOL CALLBACK CmdKillAnyVendorWindowProc(HWND hWnd, LPARAM lParam)
+{
+    int *count = (int*)lParam;
+    if (hWnd == g_hWnd) return TRUE;
+
+    WCHAR cls[64];
+    cls[0] = 0;
+    GetClassNameW(hWnd, cls, sizeof(cls)/sizeof(cls[0]));
+
+    if (_wcsicmp(cls, L"HHTaskBar") == 0 ||
+        _wcsicmp(cls, L"DesktopExplorerWindow") == 0) {
+        return TRUE;
     }
 
-    pe.dwSize = sizeof(pe);
-    if (Process32First(hSnap, &pe)) {
-        do {
-            if (_wcsicmp(pe.szExeFile, L"Launch.exe") == 0 ||
-                _wcsicmp(pe.szExeFile, L"Main.exe") == 0 ||
-                _wcsicmp(pe.szExeFile, L"YFMenu.exe") == 0) {
-                
-                /* Hide and close all windows belonging to this PID */
-                EnumWindows(EnumHideVendorWindowsProc, (LPARAM)pe.th32ProcessID);
+    RECT rc;
+    GetWindowRect(hWnd, &rc);
+    int w = rc.right - rc.left;
+    int h = rc.bottom - rc.top;
 
-                HANDLE hProc = OpenProcess(0x0001 /* PROCESS_TERMINATE */, FALSE, pe.th32ProcessID);
-                WCHAR line[128];
-                if (hProc) {
-                    if (TerminateProcess(hProc, 0)) {
-                        wsprintfW(line, L"[KILL] Terminated %s (PID 0x%08X)!",
-                                  pe.szExeFile, pe.th32ProcessID);
-                    } else {
-                        wsprintfW(line, L"[KILL] TerminateProcess failed (err %lu)", GetLastError());
+    if (w >= 400 && h >= 200) {
+        DWORD pid = 0;
+        GetWindowThreadProcessId(hWnd, &pid);
+
+        ShowWindow(hWnd, SW_HIDE);
+        SetWindowPos(hWnd, HWND_BOTTOM, -2000, -2000, 10, 10, SWP_HIDEWINDOW | SWP_NOACTIVATE);
+        EnableWindow(hWnd, FALSE);
+        PostMessage(hWnd, WM_CLOSE, 0, 0);
+
+        WCHAR procName[64];
+        procName[0] = 0;
+        HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if (hSnap != INVALID_HANDLE_VALUE) {
+            PROCESSENTRY32 pe;
+            pe.dwSize = sizeof(pe);
+            if (Process32First(hSnap, &pe)) {
+                do {
+                    if (pe.th32ProcessID == pid) {
+                        wcsncpy(procName, pe.szExeFile, 63);
+                        break;
                     }
-                    CloseHandle(hProc);
-                    TermPrint(line);
-                } else {
-                    wsprintfW(line, L"[KILL] OpenProcess failed for PID 0x%08X (err %lu)",
-                              pe.th32ProcessID, GetLastError());
-                    TermPrint(line);
-                }
-                found = TRUE;
+                } while (Process32Next(hSnap, &pe));
             }
-        } while (Process32Next(hSnap, &pe));
-    }
-    CloseHandle(hSnap);
+            CloseHandle(hSnap);
+        }
 
-    if (!found) {
-        TermPrint(L"[KILL] Launch.exe / Main.exe not found in process table");
+        WCHAR line[128];
+        if (_wcsicmp(procName, L"nk.exe") != 0 &&
+            _wcsicmp(procName, L"gwes.exe") != 0 &&
+            _wcsicmp(procName, L"device.exe") != 0 &&
+            _wcsicmp(procName, L"filesys.exe") != 0 &&
+            _wcsicmp(procName, L"services.exe") != 0 &&
+            _wcsicmp(procName, L"explorer.exe") != 0 &&
+            _wcsicmp(procName, L"mero-shell.exe") != 0 &&
+            _wcsicmp(procName, L"mero-cmd.exe") != 0) {
+            
+            HANDLE hProc = OpenProcess(0x0001 /* PROCESS_TERMINATE */, FALSE, pid);
+            if (hProc) {
+                TerminateProcess(hProc, 0);
+                CloseHandle(hProc);
+                wsprintfW(line, L"[KILL] Terminated %s (PID 0x%08X)", procName, pid);
+            } else {
+                wsprintfW(line, L"[KILL] Hid %s window (PID 0x%08X)", procName, pid);
+            }
+        } else {
+            wsprintfW(line, L"[KILL] Hid fullscreen window (Class: %s)", cls);
+        }
+        TermPrint(line);
+        (*count)++;
     }
+    return TRUE;
+}
+
+static void CmdUniversalKill(void)
+{
+    int count = 0;
+    TermPrint(L"[KILL] Scanning for vendor UI windows...");
+
+    /* 1. Universal fullscreen window sweep */
+    EnumWindows(CmdKillAnyVendorWindowProc, (LPARAM)&count);
+
+    /* 2. Process table sweep for Launch.exe / Main.exe */
+    HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (hSnap != INVALID_HANDLE_VALUE) {
+        PROCESSENTRY32 pe;
+        pe.dwSize = sizeof(pe);
+        if (Process32First(hSnap, &pe)) {
+            do {
+                if (_wcsicmp(pe.szExeFile, L"Launch.exe") == 0 ||
+                    _wcsicmp(pe.szExeFile, L"Main.exe") == 0 ||
+                    _wcsicmp(pe.szExeFile, L"YFMenu.exe") == 0) {
+                    
+                    HANDLE hProc = OpenProcess(0x0001, FALSE, pe.th32ProcessID);
+                    if (hProc) {
+                        TerminateProcess(hProc, 0);
+                        CloseHandle(hProc);
+                        WCHAR line[128];
+                        wsprintfW(line, L"[KILL] Terminated %s (PID 0x%08X)", pe.szExeFile, pe.th32ProcessID);
+                        TermPrint(line);
+                        count++;
+                    }
+                }
+            } while (Process32Next(hSnap, &pe));
+        }
+        CloseHandle(hSnap);
+    }
+
+    if (count == 0) {
+        TermPrint(L"[KILL] No active vendor windows or processes found");
+    } else {
+        WCHAR line[64];
+        wsprintfW(line, L"[KILL] Suppressed %d vendor components!", count);
+        TermPrint(line);
+    }
+}
+
+static BOOL CALLBACK CmdMinimizeAllProc(HWND hWnd, LPARAM lParam)
+{
+    (void)lParam;
+    WCHAR cls[64];
+    if (IsWindowVisible(hWnd) && hWnd != g_hWnd) {
+        GetClassNameW(hWnd, cls, sizeof(cls) / sizeof(cls[0]));
+        if (_wcsicmp(cls, L"HHTaskBar") != 0 && _wcsicmp(cls, L"DesktopExplorerWindow") != 0) {
+            ShowWindow(hWnd, SW_MINIMIZE);
+        }
+    }
+    return TRUE;
+}
+
+static void CmdDesktop(void)
+{
+    HWND hTaskbar = FindWindowW(L"HHTaskBar", NULL);
+    HWND hDesktop = FindWindowW(L"DesktopExplorerWindow", NULL);
+    if (!hTaskbar || !hDesktop) {
+        PROCESS_INFORMATION pi;
+        memset(&pi, 0, sizeof(pi));
+        if (CreateProcessW(L"\\Windows\\explorer.exe", NULL, NULL, NULL, FALSE, 0, NULL, NULL, NULL, &pi)) {
+            CloseHandle(pi.hProcess);
+            CloseHandle(pi.hThread);
+        }
+        Sleep(400);
+        hTaskbar = FindWindowW(L"HHTaskBar", NULL);
+        hDesktop = FindWindowW(L"DesktopExplorerWindow", NULL);
+    }
+
+    /* Minimize all open applications */
+    EnumWindows(CmdMinimizeAllProc, 0);
+
+    /* Show and activate Desktop */
+    if (hDesktop) {
+        ShowWindow(hDesktop, SW_SHOW);
+        SetWindowPos(hDesktop, HWND_BOTTOM, 0, 0, g_screenW, g_screenH, SWP_SHOWWINDOW);
+        InvalidateRect(hDesktop, NULL, TRUE);
+        UpdateWindow(hDesktop);
+    }
+
+    /* Show taskbar on top */
+    if (hTaskbar) {
+        ShowWindow(hTaskbar, SW_SHOW);
+        SetWindowPos(hTaskbar, HWND_TOPMOST, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+    }
+
+    /* Force display repaint */
+    RedrawWindow(NULL, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
+
+    ShowWindow(g_hWnd, SW_MINIMIZE);
+}
+
+static void CmdReboot(void)
+{
+    DWORD bytesRet = 0;
+    TermPrint(L"[REBOOT] Triggering hardware cold restart...");
+    UpdateWindow(g_hWnd);
+    Sleep(200);
+    KernelIoControl(IOCTL_HAL_REBOOT, NULL, 0, NULL, 0, &bytesRet);
+    SetSystemPowerState(NULL, POWER_STATE_RESET, 0);
 }
 
 /* Command: cat file */
@@ -354,20 +551,20 @@ static void InitDockButtons(void)
     g_dockBtns[4].color = RGB(255, 80, 80);
 
     SetRect(&g_dockBtns[5].rc, x0 + (btnW+spacing)*5, y1, x0 + (btnW+spacing)*5 + btnW, y1 + btnH);
-    g_dockBtns[5].label = L"reg init";
-    g_dockBtns[5].cmdId = CMD_ID_REG_INIT;
+    g_dockBtns[5].label = L"winlist";
+    g_dockBtns[5].cmdId = CMD_ID_WINLIST;
     g_dockBtns[5].color = RGB(180, 140, 255);
 
     /* Row 2 */
     SetRect(&g_dockBtns[6].rc, x0 + (btnW+spacing)*0, y2, x0 + (btnW+spacing)*0 + btnW, y2 + btnH);
-    g_dockBtns[6].label = L"cat dump";
-    g_dockBtns[6].cmdId = CMD_ID_CAT_DUMP;
-    g_dockBtns[6].color = RGB(255, 140, 200);
+    g_dockBtns[6].label = L"desktop";
+    g_dockBtns[6].cmdId = CMD_ID_DESKTOP;
+    g_dockBtns[6].color = RGB(0, 255, 128);
 
     SetRect(&g_dockBtns[7].rc, x0 + (btnW+spacing)*1, y2, x0 + (btnW+spacing)*1 + btnW, y2 + btnH);
-    g_dockBtns[7].label = L"cat probe";
-    g_dockBtns[7].cmdId = CMD_ID_CAT_PROBE;
-    g_dockBtns[7].color = RGB(255, 140, 200);
+    g_dockBtns[7].label = L"reboot";
+    g_dockBtns[7].cmdId = CMD_ID_REBOOT;
+    g_dockBtns[7].color = RGB(255, 100, 80);
 
     SetRect(&g_dockBtns[8].rc, x0 + (btnW+spacing)*2, y2, x0 + (btnW+spacing)*2 + btnW, y2 + btnH);
     g_dockBtns[8].label = L"explorer";
@@ -519,16 +716,16 @@ static void HandleCommand(int cmdId)
         CmdPs();
         break;
     case CMD_ID_KILL_LAUNCH:
-        CmdKillLaunch();
+        CmdUniversalKill();
         break;
-    case CMD_ID_REG_INIT:
-        CmdRegInit();
+    case CMD_ID_WINLIST:
+        CmdWinList();
         break;
-    case CMD_ID_CAT_DUMP:
-        CmdCat(L"\\SDMMC\\MERO\\system_dump.txt");
+    case CMD_ID_DESKTOP:
+        CmdDesktop();
         break;
-    case CMD_ID_CAT_PROBE:
-        CmdCat(L"\\SDMMC\\MERO\\probe.txt");
+    case CMD_ID_REBOOT:
+        CmdReboot();
         break;
     case CMD_ID_EXPLORER:
         {
