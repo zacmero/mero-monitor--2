@@ -181,230 +181,16 @@ static void UpdateSystemStatus(void)
     }
 }
 
-static BOOL CALLBACK EnumHideVendorWindowsProc(HWND hWnd, LPARAM lParam)
+/* Hide and disable vendor UI shell window */
+static void HideVendorUI(void)
 {
-    DWORD pid = 0;
-    GetWindowThreadProcessId(hWnd, &pid);
-    if (pid == (DWORD)lParam) {
-        ShowWindow(hWnd, SW_HIDE);
-        SetWindowPos(hWnd, HWND_BOTTOM, -2000, -2000, 10, 10, SWP_HIDEWINDOW | SWP_NOACTIVATE);
-        EnableWindow(hWnd, FALSE);
-        PostMessage(hWnd, WM_CLOSE, 0, 0);
-    }
-    return TRUE;
-}
-
-/* Hide and terminate vendor UI launcher completely */
-static void SuppressAndKillVendorUI(void)
-{
-    HANDLE hSnap;
-    PROCESSENTRY32 pe;
-
-    /* Fallback window class/title search */
     HWND hWndVendor = FindWindowW(NULL, L"Launch");
     if (!hWndVendor) hWndVendor = FindWindowW(L"Launch", NULL);
     if (!hWndVendor) hWndVendor = FindWindowW(NULL, L"Main");
     if (!hWndVendor) hWndVendor = FindWindowW(L"Main", NULL);
     if (hWndVendor) {
         ShowWindow(hWndVendor, SW_HIDE);
-        SetWindowPos(hWndVendor, HWND_BOTTOM, -2000, -2000, 10, 10, SWP_HIDEWINDOW | SWP_NOACTIVATE);
         EnableWindow(hWndVendor, FALSE);
-    }
-
-    /* PID-based window hiding and process termination */
-    hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    if (hSnap != INVALID_HANDLE_VALUE) {
-        pe.dwSize = sizeof(pe);
-        if (Process32First(hSnap, &pe)) {
-            do {
-                if (_wcsicmp(pe.szExeFile, L"Launch.exe") == 0 ||
-                    _wcsicmp(pe.szExeFile, L"Main.exe") == 0 ||
-                    _wcsicmp(pe.szExeFile, L"YFMenu.exe") == 0) {
-                    
-                    EnumWindows(EnumHideVendorWindowsProc, (LPARAM)pe.th32ProcessID);
-
-                    HANDLE hProc = OpenProcess(0x0001 /* PROCESS_TERMINATE */, FALSE, pe.th32ProcessID);
-                    if (hProc) {
-                        TerminateProcess(hProc, 0);
-                        CloseHandle(hProc);
-                    }
-                }
-            } while (Process32Next(hSnap, &pe));
-        }
-        CloseHandle(hSnap);
-    }
-}
-
-/* Universal fullscreen suppressor: hides ANY window covering the screen that isn't shell or desktop */
-static BOOL CALLBACK KillAnyVendorWindowProc(HWND hWnd, LPARAM lParam)
-{
-    (void)lParam;
-    if (hWnd == g_hWnd) return TRUE;
-
-    WCHAR cls[64];
-    cls[0] = 0;
-    GetClassNameW(hWnd, cls, sizeof(cls) / sizeof(cls[0]));
-
-    if (_wcsicmp(cls, L"HHTaskBar") == 0 ||
-        _wcsicmp(cls, L"DesktopExplorerWindow") == 0) {
-        return TRUE;
-    }
-
-    RECT rc;
-    GetWindowRect(hWnd, &rc);
-    int w = rc.right - rc.left;
-    int h = rc.bottom - rc.top;
-
-    if (w >= 400 && h >= 200) {
-        DWORD pid = 0;
-        GetWindowThreadProcessId(hWnd, &pid);
-
-        ShowWindow(hWnd, SW_HIDE);
-        SetWindowPos(hWnd, HWND_BOTTOM, -2000, -2000, 10, 10, SWP_HIDEWINDOW | SWP_NOACTIVATE);
-        EnableWindow(hWnd, FALSE);
-        PostMessage(hWnd, WM_CLOSE, 0, 0);
-
-        WCHAR procName[64];
-        procName[0] = 0;
-        HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-        if (hSnap != INVALID_HANDLE_VALUE) {
-            PROCESSENTRY32 pe;
-            pe.dwSize = sizeof(pe);
-            if (Process32First(hSnap, &pe)) {
-                do {
-                    if (pe.th32ProcessID == pid) {
-                        wcsncpy(procName, pe.szExeFile, 63);
-                        break;
-                    }
-                } while (Process32Next(hSnap, &pe));
-            }
-            CloseHandle(hSnap);
-        }
-
-        if (_wcsicmp(procName, L"nk.exe") != 0 &&
-            _wcsicmp(procName, L"gwes.exe") != 0 &&
-            _wcsicmp(procName, L"device.exe") != 0 &&
-            _wcsicmp(procName, L"filesys.exe") != 0 &&
-            _wcsicmp(procName, L"services.exe") != 0 &&
-            _wcsicmp(procName, L"explorer.exe") != 0 &&
-            _wcsicmp(procName, L"mero-shell.exe") != 0 &&
-            _wcsicmp(procName, L"mero-cmd.exe") != 0) {
-            
-            HANDLE hProc = OpenProcess(0x0001 /* PROCESS_TERMINATE */, FALSE, pid);
-            if (hProc) {
-                TerminateProcess(hProc, 0);
-                CloseHandle(hProc);
-            }
-        }
-    }
-    return TRUE;
-}
-
-static void UniversalSuppressVendorUI(void)
-{
-    SuppressAndKillVendorUI();
-    EnumWindows(KillAnyVendorWindowProc, 0);
-}
-
-/* Dump all active windows and processes to SD card for deep diagnostic inspection */
-static BOOL CALLBACK DumpAllWindowsProc(HWND hWnd, LPARAM lParam)
-{
-    HANDLE hFile = (HANDLE)lParam;
-    WCHAR title[128];
-    WCHAR className[128];
-    RECT rc;
-    DWORD pid = 0;
-    char line[256];
-    BOOL isVis;
-
-    title[0] = 0;
-    className[0] = 0;
-    GetWindowTextW(hWnd, title, 128);
-    GetClassNameW(hWnd, className, 128);
-    GetWindowRect(hWnd, &rc);
-    GetWindowThreadProcessId(hWnd, &pid);
-    isVis = IsWindowVisible(hWnd);
-
-    WCHAR procName[64];
-    wcscpy(procName, L"Unknown");
-    HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    if (hSnap != INVALID_HANDLE_VALUE) {
-        PROCESSENTRY32 pe;
-        pe.dwSize = sizeof(pe);
-        if (Process32First(hSnap, &pe)) {
-            do {
-                if (pe.th32ProcessID == pid) {
-                    wcsncpy(procName, pe.szExeFile, 63);
-                    break;
-                }
-            } while (Process32Next(hSnap, &pe));
-        }
-        CloseHandle(hSnap);
-    }
-
-    snprintf(line, sizeof(line),
-        "HWND: 0x%08X | PID: 0x%08X (%ls) | Rect: [%d,%d-%d,%d] | Vis: %s | Class: \"%ls\" | Title: \"%ls\"\r\n",
-        (unsigned int)hWnd, (unsigned int)pid, procName,
-        rc.left, rc.top, rc.right, rc.bottom,
-        isVis ? "YES" : "NO",
-        className, title);
-
-    if (hFile != INVALID_HANDLE_VALUE) {
-        DWORD written;
-        WriteFile(hFile, line, (DWORD)strlen(line), &written, NULL);
-    }
-    return TRUE;
-}
-
-static void DumpWindowsAndProcesses(void)
-{
-    HANDLE hFile;
-    DWORD written;
-    char line[256];
-    HANDLE hSnap;
-    PROCESSENTRY32 pe;
-
-    CreateDirectoryW(CFG_DIR, NULL);
-    hFile = CreateFileW(
-        L"\\SDMMC\\MERO\\window_dump.txt",
-        GENERIC_WRITE,
-        FILE_SHARE_READ,
-        NULL,
-        CREATE_ALWAYS,
-        FILE_ATTRIBUTE_NORMAL,
-        NULL
-    );
-
-    if (hFile != INVALID_HANDLE_VALUE) {
-        #define WRITE_STR(s) WriteFile(hFile, s, (DWORD)strlen(s), &written, NULL)
-        WRITE_STR("========================================\r\n");
-        WRITE_STR("   MERO MONITOR #2: LIVE WINDOW TABLE   \r\n");
-        WRITE_STR("========================================\r\n\r\n");
-
-        EnumWindows(DumpAllWindowsProc, (LPARAM)hFile);
-
-        WRITE_STR("\r\n========================================\r\n");
-        WRITE_STR("   MERO MONITOR #2: LIVE PROCESS TABLE  \r\n");
-        WRITE_STR("========================================\r\n\r\n");
-
-        hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-        if (hSnap != INVALID_HANDLE_VALUE) {
-            pe.dwSize = sizeof(pe);
-            if (Process32First(hSnap, &pe)) {
-                do {
-                    snprintf(line, sizeof(line), "  PID: 0x%08X  Threads: %2d  Base: 0x%08X  %ls\r\n",
-                             (unsigned int)pe.th32ProcessID,
-                             (int)pe.cntThreads,
-                             (unsigned int)pe.th32MemoryBase,
-                             pe.szExeFile);
-                    WRITE_STR(line);
-                } while (Process32Next(hSnap, &pe));
-            }
-            CloseHandle(hSnap);
-        }
-        WRITE_STR("\r\n=== END OF TABLE ===\r\n");
-        #undef WRITE_STR
-        CloseHandle(hFile);
     }
 }
 
@@ -437,7 +223,7 @@ static void ShowDesktop(void)
         hDesktop = FindWindowW(L"DesktopExplorerWindow", NULL);
     }
 
-    UniversalSuppressVendorUI();
+    HideVendorUI();
     EnumWindows(EnumMinimizeAllProc, 0);
 
     if (hDesktop) {
@@ -935,9 +721,8 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
 {
     switch (uMsg) {
     case WM_CREATE:
-        DumpWindowsAndProcesses();
-        PerformSystemDump();
-        UniversalSuppressVendorUI();
+        g_hWnd = hWnd;
+        HideVendorUI();
         UpdateSystemStatus();
         SetMasterVolume(g_volumeLevel);
         UpdateButtons();
@@ -950,15 +735,10 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
 
     case WM_TIMER:
         if (wParam == TIMER_ID_TICK) {
-            static int suppressTick = 0;
             DWORD prevAvail = g_memAvailMB;
             int prevBat = g_batteryPercent;
             BOOL prevAC = g_isAC;
             UpdateSystemStatus();
-
-            if (++suppressTick % 3 == 0) {
-                UniversalSuppressVendorUI();
-            }
 
             if (g_countdownActive) {
                 if (g_countdownSeconds > 1) {
@@ -1028,7 +808,7 @@ int WINAPI WinMain(
     }
 
     g_hWnd = CreateWindowExW(
-        0,
+        WS_EX_TOPMOST,
         L"MeroShellWndClass",
         L"Mero Shell",
         WS_VISIBLE | WS_POPUP,

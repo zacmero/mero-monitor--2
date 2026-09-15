@@ -289,6 +289,7 @@ static BOOL CALLBACK CmdKillAnyVendorWindowProc(HWND hWnd, LPARAM lParam)
     if (w >= 400 && h >= 200) {
         DWORD pid = 0;
         GetWindowThreadProcessId(hWnd, &pid);
+        if (pid == GetCurrentProcessId()) return TRUE;
 
         ShowWindow(hWnd, SW_HIDE);
         SetWindowPos(hWnd, HWND_BOTTOM, -2000, -2000, 10, 10, SWP_HIDEWINDOW | SWP_NOACTIVATE);
@@ -802,6 +803,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
 {
     switch (uMsg) {
     case WM_CREATE:
+        g_hWnd = hWnd;
         InitDockButtons();
         TermClear();
         return 0;
@@ -854,7 +856,7 @@ int WINAPI WinMain(
     }
 
     g_hWnd = CreateWindowExW(
-        0,
+        WS_EX_TOPMOST,
         L"MeroCmdWndClass",
         L"Mero Cmd",
         WS_VISIBLE | WS_POPUP,
