@@ -417,9 +417,14 @@ static void CreateDesktopShortcuts(void)
 {
     HANDLE hFile;
     DWORD written;
-    const char *lnkShell = "26#\\SDMMC\\MERO\\mero-shell.exe";
-    const char *lnkCmd   = "24#\\SDMMC\\MERO\\mero-cmd.exe";
-    const char *lnkFlash = "35#\\ResidentFlash\\MERO\\mero-shell.exe";
+    const char *lnkShell = "26#\\SDMMC\\MERO\\mero-shell.exe?\\SDMMC\\MERO\\mero-shell.ico,0";
+    const char *lnkCmd   = "24#\\SDMMC\\MERO\\mero-cmd.exe?\\SDMMC\\MERO\\mero-cmd.ico,0";
+    const char *lnkFlash = "34#\\ResidentFlash\\MERO\\mero-shell.exe?\\ResidentFlash\\MERO\\mero-flash.ico,0";
+
+    CreateDirectoryW(L"\\ResidentFlash\\MERO", NULL);
+    CopyFileW(L"\\SDMMC\\MERO\\mero-shell.ico", L"\\ResidentFlash\\MERO\\mero-shell.ico", FALSE);
+    CopyFileW(L"\\SDMMC\\MERO\\mero-cmd.ico", L"\\ResidentFlash\\MERO\\mero-cmd.ico", FALSE);
+    CopyFileW(L"\\SDMMC\\MERO\\mero-flash.ico", L"\\ResidentFlash\\MERO\\mero-flash.ico", FALSE);
 
     CreateDirectoryW(L"\\Windows\\Desktop", NULL);
 
@@ -498,8 +503,10 @@ static void CmdDesktop(void)
     /* Force display repaint */
     RedrawWindow(NULL, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
 
-    /* Hide Mero Cmd completely from display list and touch routing */
-    ShowWindow(g_hWnd, SW_HIDE);
+    /* Cleanly exit Mero Cmd so WinCE Desktop and Explorer have full control */
+    if (g_hWnd) {
+        DestroyWindow(g_hWnd);
+    }
 }
 
 static void CmdReboot(void)
@@ -531,8 +538,11 @@ static void CmdBoot(const WCHAR *arg)
         CreateDirectoryW(L"\\ResidentFlash\\MERO", NULL);
         CopyFileW(L"\\SDMMC\\MERO\\mero-shell.exe", L"\\ResidentFlash\\MERO\\mero-shell.exe", FALSE);
         CopyFileW(L"\\SDMMC\\MERO\\mero-cmd.exe", L"\\ResidentFlash\\MERO\\mero-cmd.exe", FALSE);
+        CopyFileW(L"\\SDMMC\\MERO\\mero-shell.ico", L"\\ResidentFlash\\MERO\\mero-shell.ico", FALSE);
+        CopyFileW(L"\\SDMMC\\MERO\\mero-cmd.ico", L"\\ResidentFlash\\MERO\\mero-cmd.ico", FALSE);
+        CopyFileW(L"\\SDMMC\\MERO\\mero-flash.ico", L"\\ResidentFlash\\MERO\\mero-flash.ico", FALSE);
         newTarget = L"\\ResidentFlash\\MERO\\mero-shell.exe";
-        TermPrint(L"[BOOT] Copied shell & cmd to \\ResidentFlash\\MERO\\");
+        TermPrint(L"[BOOT] Copied shell, cmd & icons to \\ResidentFlash\\MERO\\");
     } else if (_wcsicmp(arg, L"sd") == 0) {
         newTarget = L"\\SDMMC\\MERO\\mero-shell.exe";
     } else if (_wcsicmp(arg, L"desktop") == 0) {
@@ -732,6 +742,12 @@ static void OnPaint(HWND hWnd)
     int i;
     int y;
 
+    if (!IsWindowVisible(hWnd)) {
+        hdc = BeginPaint(hWnd, &ps);
+        EndPaint(hWnd, &ps);
+        return;
+    }
+
     hdc = BeginPaint(hWnd, &ps);
     GetClientRect(hWnd, &rc);
 
@@ -891,7 +907,19 @@ static void HandleCommand(int cmdId)
         TermClear();
         break;
     case CMD_ID_EXIT:
-        DestroyWindow(g_hWnd);
+        {
+            PROCESS_INFORMATION pi;
+            memset(&pi, 0, sizeof(pi));
+            /* Relaunch Mero Shell so device returns to cybernetic shell */
+            if (!CreateProcessW(L"\\ResidentFlash\\MERO\\mero-shell.exe", NULL, NULL, NULL, FALSE, 0, NULL, NULL, NULL, &pi)) {
+                CreateProcessW(L"\\SDMMC\\MERO\\mero-shell.exe", NULL, NULL, NULL, FALSE, 0, NULL, NULL, NULL, &pi);
+            }
+            if (pi.hProcess) {
+                CloseHandle(pi.hProcess);
+                CloseHandle(pi.hThread);
+            }
+            DestroyWindow(g_hWnd);
+        }
         break;
     case CMD_ID_SCROLL_UP:
         if (g_scrollOffset > 0) {
@@ -985,6 +1013,7 @@ int WINAPI WinMain(
     memset(&wc, 0, sizeof(wc));
     wc.lpfnWndProc   = WndProc;
     wc.hInstance     = hInstance;
+    wc.hIcon         = LoadIcon(hInstance, MAKEINTRESOURCE(1));
     wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
     wc.lpszClassName = L"MeroCmdWndClass";
 

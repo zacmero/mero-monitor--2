@@ -55,7 +55,7 @@ SECTIONS=$(docker run --rm -v "$(pwd)":/work -w /work "$DOCKER_IMG" \
     arm-mingw32ce-objdump -h "$TARGET_EXE" 2>/dev/null)
 
 echo "[+] Section Table:"
-echo "$SECTIONS" | grep -E "^\s+[0-9]+\s+\.(text|data|rdata|bss|idata)" | awk '{print "    " $2 "\tSize: " $3 "\tVMA: " $4}'
+echo "$SECTIONS" | grep -E "^\s+[0-9]+\s+\.(text|data|rdata|bss|idata|rsrc)" | awk '{print "    " $2 "\tSize: " $3 "\tVMA: " $4}'
 
 echo "========================================================"
 echo " [+] VERIFICATION PASSED: Binary is 100% valid WinCE ARM PE32."

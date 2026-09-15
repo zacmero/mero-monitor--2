@@ -261,9 +261,14 @@ static void CreateDesktopShortcuts(void)
 {
     HANDLE hFile;
     DWORD written;
-    const char *lnkShell = "26#\\SDMMC\\MERO\\mero-shell.exe";
-    const char *lnkCmd   = "24#\\SDMMC\\MERO\\mero-cmd.exe";
-    const char *lnkFlash = "35#\\ResidentFlash\\MERO\\mero-shell.exe";
+    const char *lnkShell = "26#\\SDMMC\\MERO\\mero-shell.exe?\\SDMMC\\MERO\\mero-shell.ico,0";
+    const char *lnkCmd   = "24#\\SDMMC\\MERO\\mero-cmd.exe?\\SDMMC\\MERO\\mero-cmd.ico,0";
+    const char *lnkFlash = "34#\\ResidentFlash\\MERO\\mero-shell.exe?\\ResidentFlash\\MERO\\mero-flash.ico,0";
+
+    CreateDirectoryW(L"\\ResidentFlash\\MERO", NULL);
+    CopyFileW(L"\\SDMMC\\MERO\\mero-shell.ico", L"\\ResidentFlash\\MERO\\mero-shell.ico", FALSE);
+    CopyFileW(L"\\SDMMC\\MERO\\mero-cmd.ico", L"\\ResidentFlash\\MERO\\mero-cmd.ico", FALSE);
+    CopyFileW(L"\\SDMMC\\MERO\\mero-flash.ico", L"\\ResidentFlash\\MERO\\mero-flash.ico", FALSE);
 
     CreateDirectoryW(L"\\Windows\\Desktop", NULL);
 
@@ -329,6 +334,9 @@ static BOOL ApplyBootTarget(BootTarget target)
         CreateDirectoryW(L"\\ResidentFlash\\MERO", NULL);
         CopyFileW(L"\\SDMMC\\MERO\\mero-shell.exe", L"\\ResidentFlash\\MERO\\mero-shell.exe", FALSE);
         CopyFileW(L"\\SDMMC\\MERO\\mero-cmd.exe", L"\\ResidentFlash\\MERO\\mero-cmd.exe", FALSE);
+        CopyFileW(L"\\SDMMC\\MERO\\mero-shell.ico", L"\\ResidentFlash\\MERO\\mero-shell.ico", FALSE);
+        CopyFileW(L"\\SDMMC\\MERO\\mero-cmd.ico", L"\\ResidentFlash\\MERO\\mero-cmd.ico", FALSE);
+        CopyFileW(L"\\SDMMC\\MERO\\mero-flash.ico", L"\\ResidentFlash\\MERO\\mero-flash.ico", FALSE);
         launchPath = L"\\ResidentFlash\\MERO\\mero-shell.exe";
         break;
     case BOOT_SDMMC:
@@ -377,7 +385,7 @@ static BOOL CALLBACK EnumMinimizeAllProc(HWND hWnd, LPARAM lParam)
 }
 
 /* Forward declaration */
-static BOOL LaunchApp(const WCHAR *path, BOOL minimizeShell);
+static BOOL LaunchApp(const WCHAR *path, BOOL exitShell);
 
 /* Expose Windows CE Desktop & Taskbar cleanly */
 static void ShowDesktop(void)
@@ -413,9 +421,9 @@ static void ShowDesktop(void)
 
     RedrawWindow(NULL, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
 
-    /* Hide Mero Shell completely from display list and touch routing */
+    /* Cleanly destroy Mero Shell so WinCE Desktop and Explorer have full control */
     if (g_hWnd) {
-        ShowWindow(g_hWnd, SW_HIDE);
+        DestroyWindow(g_hWnd);
     }
 }
 
@@ -428,20 +436,32 @@ static void HardwareReboot(void)
     SetSystemPowerState(NULL, POWER_STATE_RESET, 0);
 }
 
-/* Launch an external application */
-static BOOL LaunchApp(const WCHAR *path, BOOL minimizeShell)
+/* Launch an external application with automatic SDMMC/ResidentFlash fallback */
+static BOOL LaunchApp(const WCHAR *path, BOOL exitShell)
 {
     PROCESS_INFORMATION pi;
     BOOL ret;
 
     memset(&pi, 0, sizeof(pi));
     ret = CreateProcessW(path, NULL, NULL, NULL, FALSE, 0, NULL, NULL, NULL, &pi);
+    if (!ret) {
+        /* Fallback between \SDMMC and \ResidentFlash */
+        if (wcsstr(path, L"\\SDMMC\\MERO\\")) {
+            WCHAR altPath[MAX_PATH];
+            wsprintfW(altPath, L"\\ResidentFlash\\MERO\\%s", path + 12);
+            ret = CreateProcessW(altPath, NULL, NULL, NULL, FALSE, 0, NULL, NULL, NULL, &pi);
+        } else if (wcsstr(path, L"\\ResidentFlash\\MERO\\")) {
+            WCHAR altPath[MAX_PATH];
+            wsprintfW(altPath, L"\\SDMMC\\MERO\\%s", path + 20);
+            ret = CreateProcessW(altPath, NULL, NULL, NULL, FALSE, 0, NULL, NULL, NULL, &pi);
+        }
+    }
     if (ret) {
         CloseHandle(pi.hProcess);
         CloseHandle(pi.hThread);
-        if (minimizeShell && g_hWnd) {
-            /* Yield focus completely so launched app takes full screen */
-            ShowWindow(g_hWnd, SW_HIDE);
+        if (exitShell && g_hWnd) {
+            /* Destroy shell cleanly so launched child owns the screen & RAM */
+            DestroyWindow(g_hWnd);
         }
     }
     return ret;
@@ -727,6 +747,12 @@ static void OnPaint(HWND hWnd)
     WCHAR buf[256];
     int i;
 
+    if (!IsWindowVisible(hWnd)) {
+        hdc = BeginPaint(hWnd, &ps);
+        EndPaint(hWnd, &ps);
+        return;
+    }
+
     hdc = BeginPaint(hWnd, &ps);
     GetClientRect(hWnd, &rc);
 
@@ -969,6 +995,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
 
     case WM_TIMER:
         if (wParam == TIMER_ID_TICK) {
+            if (!IsWindowVisible(hWnd)) return 0;
             DWORD prevAvail = g_memAvailMB;
             int prevBat = g_batteryPercent;
             BOOL prevAC = g_isAC;
@@ -1045,6 +1072,7 @@ int WINAPI WinMain(
     memset(&wc, 0, sizeof(wc));
     wc.lpfnWndProc   = WndProc;
     wc.hInstance     = hInstance;
+    wc.hIcon         = LoadIcon(hInstance, MAKEINTRESOURCE(1));
     wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
     wc.lpszClassName = L"MeroShellWndClass";
 
