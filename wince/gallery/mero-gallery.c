@@ -41,9 +41,14 @@ typedef struct {
 } ImageFile;
 
 typedef enum {
-    FIT_ASPECT = 0,    /* Letterboxed/pillarboxed preserving ratio */
-    FIT_STRETCH = 1    /* Stretch to fill full 480x272 LCD */
+    FIT_CONTAIN = 0,   /* Letterbox: entire image visible, black bars if needed */
+    FIT_COVER   = 1    /* Fill: scales image to completely cover 480x272 without black bars */
 } FitMode;
+
+typedef enum {
+    ORIENT_HORIZ = 0,  /* Landscape (0°) */
+    ORIENT_VERT  = 1   /* Portrait (90° clockwise rotation) */
+} OrientMode;
 
 static HINSTANCE    g_hInstance = NULL;
 static HWND         g_hWnd = NULL;
@@ -73,7 +78,8 @@ static const int    g_intervalOptions[] = { 1, 2, 3, 5, 10, 30 };
 static const int    g_intervalOptionCount = 6;
 static int          g_intervalOptIdx = 2; /* Default 3s */
 
-static FitMode      g_fitMode = FIT_ASPECT;
+static FitMode      g_fitMode = FIT_CONTAIN;
+static OrientMode   g_orientMode = ORIENT_HORIZ;
 static BOOL         g_osdVisible = TRUE;
 static BOOL         g_folderDialogOpen = FALSE;
 
@@ -83,6 +89,7 @@ static RECT         g_rcBtnPlay;
 static RECT         g_rcBtnNext;
 static RECT         g_rcBtnInterval;
 static RECT         g_rcBtnFit;
+static RECT         g_rcBtnOrient;
 static RECT         g_rcBtnFolder;
 static RECT         g_rcBtnExit;
 
@@ -313,50 +320,84 @@ static void LoadCurrentImage(void)
     /* Clear display buffer with solid black */
     memset(g_pDIBBits, 0, g_screenW * g_screenH * sizeof(DWORD));
 
-    /* Calculate scaled destination rect */
-    int dstW, dstH, dstX, dstY;
+    /* Effective source dimensions taking orientation into account */
+    int effW = (g_orientMode == ORIENT_VERT) ? srcH : srcW;
+    int effH = (g_orientMode == ORIENT_VERT) ? srcW : srcH;
 
-    if (g_fitMode == FIT_STRETCH) {
+    int dstX = 0, dstY = 0, dstW = 0, dstH = 0;
+    float cropEffX = 0.0f, cropEffY = 0.0f;
+    float cropEffW = (float)effW, cropEffH = (float)effH;
+
+    if (g_fitMode == FIT_COVER) {
+        /* FILL: Cover entire 480x272 screen completely with zero black bars */
+        float sW = (float)g_screenW / (float)effW;
+        float sH = (float)g_screenH / (float)effH;
+        float s = (sH > sW) ? sH : sW; /* s = max(sW, sH) */
+
         dstW = g_screenW;
         dstH = g_screenH;
         dstX = 0;
         dstY = 0;
-    } else {
-        /* Preserve aspect ratio */
-        float aspectSrc = (float)srcW / (float)srcH;
-        float aspectScreen = (float)g_screenW / (float)g_screenH;
 
-        if (aspectSrc > aspectScreen) {
-            dstW = g_screenW;
-            dstH = (int)((float)g_screenW / aspectSrc);
-            dstX = 0;
-            dstY = (g_screenH - dstH) / 2;
-        } else {
-            dstH = g_screenH;
-            dstW = (int)((float)g_screenH * aspectSrc);
-            dstX = (g_screenW - dstW) / 2;
-            dstY = 0;
-        }
+        cropEffW = (float)g_screenW / s;
+        cropEffH = (float)g_screenH / s;
+        cropEffX = ((float)effW - cropEffW) / 2.0f;
+        cropEffY = ((float)effH - cropEffH) / 2.0f;
+    } else {
+        /* FIT: Contain within 480x272, preserving aspect ratio with letterbox */
+        float sW = (float)g_screenW / (float)effW;
+        float sH = (float)g_screenH / (float)effH;
+        float s = (sH < sW) ? sH : sW; /* s = min(sW, sH) */
+
+        dstW = (int)((float)effW * s);
+        dstH = (int)((float)effH * s);
+        if (dstW > g_screenW) dstW = g_screenW;
+        if (dstH > g_screenH) dstH = g_screenH;
+
+        dstX = (g_screenW - dstW) / 2;
+        dstY = (g_screenH - dstH) / 2;
+
+        cropEffX = 0.0f;
+        cropEffY = 0.0f;
+        cropEffW = (float)effW;
+        cropEffH = (float)effH;
     }
 
-    /* Boundary clamping */
-    if (dstX < 0) dstX = 0;
-    if (dstY < 0) dstY = 0;
-    if (dstW > g_screenW) dstW = g_screenW;
-    if (dstH > g_screenH) dstH = g_screenH;
-
-    /* High performance software nearest/bilinear scaler directly into 32bpp DIB buffer */
+    /* High performance software scaler into 32bpp DIB buffer */
     int dy, dx;
     for (dy = 0; dy < dstH; dy++) {
-        int srcY = (dy * srcH) / dstH;
-        DWORD *dstRow = &g_pDIBBits[(dstY + dy) * g_screenW + dstX];
-        unsigned char *srcRow = &pixels[srcY * srcW * 4];
+        float v = ((float)dy / (float)dstH) * cropEffH + cropEffY;
+        int screenY = dstY + dy;
+        if (screenY < 0 || screenY >= g_screenH) continue;
+        DWORD *dstRow = &g_pDIBBits[screenY * g_screenW];
 
         for (dx = 0; dx < dstW; dx++) {
-            int srcX = (dx * srcW) / dstW;
-            unsigned char *p = &srcRow[srcX * 4];
+            float u = ((float)dx / (float)dstW) * cropEffW + cropEffX;
+            int screenX = dstX + dx;
+            if (screenX < 0 || screenX >= g_screenW) continue;
+
+            int sx, sy;
+            if (g_orientMode == ORIENT_VERT) {
+                /* 90° clockwise rotation:
+                   effX (u) maps to srcY inverted: srcY = (srcH - 1) - u
+                   effY (v) maps to srcX:          srcX = v
+                */
+                sx = (int)v;
+                sy = srcH - 1 - (int)u;
+            } else {
+                /* 0° native orientation */
+                sx = (int)u;
+                sy = (int)v;
+            }
+
+            if (sx < 0) sx = 0;
+            else if (sx >= srcW) sx = srcW - 1;
+            if (sy < 0) sy = 0;
+            else if (sy >= srcH) sy = srcH - 1;
+
+            unsigned char *p = &pixels[(sy * srcW + sx) * 4];
             /* Pack RGB into Win32 DIB format: 0x00RRGGBB */
-            dstRow[dx] = ((DWORD)p[0] << 16) | ((DWORD)p[1] << 8) | (DWORD)p[2];
+            dstRow[screenX] = ((DWORD)p[0] << 16) | ((DWORD)p[1] << 8) | (DWORD)p[2];
         }
     }
 
@@ -409,7 +450,14 @@ static void CycleInterval(void)
 
 static void CycleFitMode(void)
 {
-    g_fitMode = (g_fitMode == FIT_ASPECT) ? FIT_STRETCH : FIT_ASPECT;
+    g_fitMode = (g_fitMode == FIT_CONTAIN) ? FIT_COVER : FIT_CONTAIN;
+    LoadCurrentImage();
+    ResetOsdTimer();
+}
+
+static void CycleOrientMode(void)
+{
+    g_orientMode = (g_orientMode == ORIENT_HORIZ) ? ORIENT_VERT : ORIENT_HORIZ;
     LoadCurrentImage();
     ResetOsdTimer();
 }
@@ -510,12 +558,14 @@ static void OnPaint(HWND hWnd)
 
         /* Status & Folder badge */
         SetTextColor(backDC, RGB(0, 220, 255));
-        wsprintfW(buf, L"%s | %s",
+        wsprintfW(buf, L"%s | %s | %s | %s",
                   g_isPlaying ? L"[PLAY]" : L"[PAUSED]",
+                  g_fitMode == FIT_CONTAIN ? L"FIT" : L"FILL",
+                  g_orientMode == ORIENT_HORIZ ? L"0 DEG" : L"90 DEG",
                   g_folders[g_currentFolderIdx].name);
-        ExtTextOutW(backDC, 300, 5, 0, NULL, buf, lstrlenW(buf), NULL);
+        ExtTextOutW(backDC, 240, 5, 0, NULL, buf, lstrlenW(buf), NULL);
 
-        /* BOTTOM HUD DOCK (Dark overlay with 6 Cybernetic Buttons) */
+        /* BOTTOM HUD DOCK (Dark overlay with 8 Cybernetic Buttons) */
         RECT rcBottom = { 0, 232, g_screenW, g_screenH };
         HBRUSH hBrBottom = CreateSolidBrush(RGB(10, 15, 20));
         FillRect(backDC, &rcBottom, hBrBottom);
@@ -536,7 +586,7 @@ static void OnPaint(HWND hWnd)
             SelectObject(backDC, hop); \
             DeleteObject(hp); \
             SetTextColor(backDC, (col)); \
-            ExtTextOutW(backDC, (rc).left + 6, (rc).top + 8, 0, NULL, (title), lstrlenW(title), NULL); \
+            ExtTextOutW(backDC, (rc).left + 4, (rc).top + 8, 0, NULL, (title), lstrlenW(title), NULL); \
         } while(0)
 
         DRAW_BTN(g_rcBtnPrev,     L"< PREV",         RGB(0, 220, 255));
@@ -546,7 +596,8 @@ static void OnPaint(HWND hWnd)
         wsprintfW(buf, L"%ds TIME", g_intervalSec);
         DRAW_BTN(g_rcBtnInterval, buf,               RGB(255, 180, 0));
 
-        DRAW_BTN(g_rcBtnFit,      g_fitMode == FIT_ASPECT ? L"FIT" : L"FILL", RGB(180, 140, 255));
+        DRAW_BTN(g_rcBtnFit,      g_fitMode == FIT_CONTAIN ? L"FIT" : L"FILL", RGB(180, 140, 255));
+        DRAW_BTN(g_rcBtnOrient,   g_orientMode == ORIENT_HORIZ ? L"HORIZ" : L"VERT", RGB(0, 255, 200));
         DRAW_BTN(g_rcBtnFolder,   L"FOLDER",         RGB(212, 0, 255));
         DRAW_BTN(g_rcBtnExit,     L"EXIT",           RGB(255, 80, 80));
 
@@ -666,6 +717,10 @@ static void OnTouch(int x, int y)
             CycleFitMode();
             return;
         }
+        if (PtInRect(&g_rcBtnOrient, pt)) {
+            CycleOrientMode();
+            return;
+        }
         if (PtInRect(&g_rcBtnFolder, pt)) {
             DiscoverFolders();
             g_folderDialogOpen = TRUE;
@@ -705,13 +760,14 @@ static void InitButtonRects(void)
     int y0 = 236;
     int h = 32;
 
-    SetRect(&g_rcBtnPrev,     6,   y0, 68,  y0 + h);
-    SetRect(&g_rcBtnPlay,     72,  y0, 138, y0 + h);
-    SetRect(&g_rcBtnNext,     142, y0, 204, y0 + h);
-    SetRect(&g_rcBtnInterval, 208, y0, 276, y0 + h);
-    SetRect(&g_rcBtnFit,      280, y0, 340, y0 + h);
-    SetRect(&g_rcBtnFolder,   344, y0, 412, y0 + h);
-    SetRect(&g_rcBtnExit,     416, y0, 474, y0 + h);
+    SetRect(&g_rcBtnPrev,     4,   y0, 58,  y0 + h);
+    SetRect(&g_rcBtnPlay,     62,  y0, 118, y0 + h);
+    SetRect(&g_rcBtnNext,     122, y0, 176, y0 + h);
+    SetRect(&g_rcBtnInterval, 180, y0, 234, y0 + h);
+    SetRect(&g_rcBtnFit,      238, y0, 292, y0 + h);
+    SetRect(&g_rcBtnOrient,   296, y0, 354, y0 + h);
+    SetRect(&g_rcBtnFolder,   358, y0, 418, y0 + h);
+    SetRect(&g_rcBtnExit,     422, y0, 476, y0 + h);
 }
 
 /* Window Procedure */

@@ -46,27 +46,26 @@ def find_default_destination():
 
 def process_image(src_path, dst_path):
     """
-    Load image (WebP, PNG, JPG, etc.), fit to 480x272 with letterbox,
+    Load image (WebP, PNG, JPG, etc.), downscale to max dimension 640
+    preserving true aspect ratio without pre-baking black bars,
     and save as optimized baseline JPEG.
     """
     try:
         with Image.open(src_path) as im:
             im = im.convert('RGB')
-            # Calculate thumbnail dimensions preserving aspect ratio
-            im_copy = im.copy()
-            im_copy.thumbnail((TARGET_WIDTH, TARGET_HEIGHT), Image.Resampling.LANCZOS)
-            
-            # Create centered letterbox canvas
-            canvas = Image.new('RGB', (TARGET_WIDTH, TARGET_HEIGHT), (0, 0, 0))
-            offset_x = (TARGET_WIDTH - im_copy.width) // 2
-            offset_y = (TARGET_HEIGHT - im_copy.height) // 2
-            canvas.paste(im_copy, (offset_x, offset_y))
-            
+            max_dim = 640
+            w, h = im.size
+            if w > max_dim or h > max_dim:
+                scale = max_dim / max(w, h)
+                new_w = max(1, int(w * scale))
+                new_h = max(1, int(h * scale))
+                im = im.resize((new_w, new_h), Image.Resampling.LANCZOS)
+
             # Write to temp file then rename for atomic write
             tmp_path = dst_path + ".tmp"
-            canvas.save(tmp_path, "JPEG", quality=92, optimize=True)
+            im.save(tmp_path, "JPEG", quality=92, optimize=True)
             os.replace(tmp_path, dst_path)
-            print(f"[STREAM-IMG] {os.path.basename(src_path)} -> {os.path.basename(dst_path)} ({os.path.getsize(dst_path)}B)")
+            print(f"[STREAM-IMG] {os.path.basename(src_path)} -> {os.path.basename(dst_path)} ({im.width}x{im.height}, {os.path.getsize(dst_path)}B)")
             return True
     except Exception as e:
         print(f"[ERROR-IMG] Failed to process {src_path}: {e}", file=sys.stderr)
@@ -74,17 +73,17 @@ def process_image(src_path, dst_path):
 
 def process_video(src_path, dst_dir, base_name, fps=1.0):
     """
-    Extract video frames via ffmpeg, downsample to 480x272 letterboxed JPEGs.
+    Extract video frames via ffmpeg, downsample to max 640 dimension
+    preserving true video aspect ratio without pre-baking black bars.
     """
     try:
-        # Check ffmpeg presence
         if not shutil.which("ffmpeg"):
             print("[WARN] ffmpeg not found; cannot process video.", file=sys.stderr)
             return []
 
         out_pattern = os.path.join(dst_dir, f"{base_name}_fr%03d.jpg")
-        vf_filter = f"fps={fps},scale={TARGET_WIDTH}:{TARGET_HEIGHT}:force_original_aspect_ratio=decrease,pad={TARGET_WIDTH}:{TARGET_HEIGHT}:(ow-iw)/2:(oh-ih)/2:black"
-        
+        vf_filter = f"fps={fps},scale='min(640,iw)':-2"
+
         cmd = [
             "ffmpeg", "-y", "-loglevel", "error",
             "-i", src_path,

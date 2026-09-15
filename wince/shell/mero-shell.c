@@ -67,6 +67,18 @@ static const WCHAR *g_prefNames[] = {
     L"HARDWARE PROBE"
 };
 
+typedef enum {
+    USB_MODE_MASS_STORAGE = 0,
+    USB_MODE_ACTIVESYNC   = 1,
+    USB_MODE_COUNT        = 2
+} UsbMode;
+
+static UsbMode g_usbMode = USB_MODE_MASS_STORAGE;
+static const WCHAR *g_usbModeNames[] = {
+    L"MASS STORAGE (U-Disk)",
+    L"ACTIVESYNC (PC Link)"
+};
+
 typedef struct {
     RECT rc;
     WCHAR title[48];
@@ -324,6 +336,66 @@ static void QueryCurrentBootTarget(void)
     }
 }
 
+/* Query active USB Function client driver */
+static void QueryCurrentUsbMode(void)
+{
+    HKEY hKey;
+    g_usbMode = USB_MODE_MASS_STORAGE;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"Drivers\\USB\\FunctionDrivers", 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+        WCHAR client[64];
+        DWORD size = sizeof(client);
+        DWORD type = 0;
+        if (RegQueryValueExW(hKey, L"DefaultClientDriver", NULL, &type, (LPBYTE)client, &size) == ERROR_SUCCESS) {
+            if (wcsstr(client, L"Serial") || wcsstr(client, L"serial") ||
+                wcsstr(client, L"RNDIS") || wcsstr(client, L"rndis")) {
+                g_usbMode = USB_MODE_ACTIVESYNC;
+            } else {
+                g_usbMode = USB_MODE_MASS_STORAGE;
+            }
+        }
+        RegCloseKey(hKey);
+    }
+}
+
+/* Toggle USB Function mode between Mass Storage and ActiveSync */
+static void ToggleUsbMode(void)
+{
+    g_usbMode = (UsbMode)((g_usbMode + 1) % USB_MODE_COUNT);
+    const WCHAR *driverName = (g_usbMode == USB_MODE_ACTIVESYNC) ? L"Serial_Class" : L"Mass_Storage_Class";
+
+    HKEY hKey;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"Drivers\\USB\\FunctionDrivers", 0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
+        RegSetValueExW(hKey, L"DefaultClientDriver", 0, REG_SZ,
+                       (const BYTE*)driverName, (lstrlenW(driverName) + 1) * sizeof(WCHAR));
+        RegFlushKey(hKey);
+        RegCloseKey(hKey);
+    }
+
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"Software\\Mesada\\USB", 0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
+        DWORD val = (g_usbMode == USB_MODE_ACTIVESYNC) ? 1 : 0;
+        RegSetValueExW(hKey, L"UsbMode", 0, REG_DWORD, (const BYTE*)&val, sizeof(DWORD));
+        RegFlushKey(hKey);
+        RegCloseKey(hKey);
+    }
+
+    /* Send runtime IOCTL to notify USB Function Controller */
+    #define IOCTL_UFN_CHANGE_CURRENT_CLIENT 0x00220008
+    HANDLE hUsb = CreateFileW(L"UFN1:", GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+    if (hUsb == INVALID_HANDLE_VALUE) {
+        hUsb = CreateFileW(L"UFN0:", GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+    }
+    if (hUsb != INVALID_HANDLE_VALUE) {
+        DWORD bytesRet = 0;
+        DeviceIoControl(hUsb, IOCTL_UFN_CHANGE_CURRENT_CLIENT,
+                        (LPVOID)driverName, (lstrlenW(driverName) + 1) * sizeof(WCHAR),
+                        NULL, 0, &bytesRet, NULL);
+        CloseHandle(hUsb);
+    }
+
+    wsprintfW(g_statusMsg, L"USB: %s [REBOOT IF NEEDED]", g_usbModeNames[g_usbMode]);
+    InvalidateRect(g_hWnd, NULL, FALSE);
+}
+
 /* Apply new HKLM\init\Launch50 boot target and persist to flash */
 static BOOL ApplyBootTarget(BootTarget target)
 {
@@ -473,7 +545,7 @@ static BOOL LaunchApp(const WCHAR *path, BOOL exitShell)
 }
 
 /* Restore or launch factory vendor UI (Launch.exe) */
-static void LaunchVendorUI(void)
+static void __attribute__((unused)) LaunchVendorUI(void)
 {
     HWND hWndVendor = FindWindowW(NULL, L"Launch");
     if (!hWndVendor) hWndVendor = FindWindowW(L"Launch", NULL);
@@ -743,9 +815,9 @@ static void UpdateButtons(void)
         lstrcpyW(g_buttons[0].sub,   g_bootTargetNames[g_bootTarget]);
         g_buttons[0].color = RGB(0, 255, 128);
 
-        lstrcpyW(g_buttons[1].title, L"[2] VENDOR GPS UI");
-        lstrcpyW(g_buttons[1].sub,   L"Launch Factory Foston Interface");
-        g_buttons[1].color = RGB(255, 140, 40);
+        lstrcpyW(g_buttons[1].title, L"[2] USB STORAGE MODE");
+        lstrcpyW(g_buttons[1].sub,   g_usbModeNames[g_usbMode]);
+        g_buttons[1].color = RGB(0, 220, 255);
 
         {
             WCHAR volBuf[32];
@@ -966,11 +1038,8 @@ static void OnTouch(int x, int y)
                     InvalidateRect(g_hWnd, NULL, FALSE);
                     break;
 
-                case 1: /* Launch Original Vendor UI */
-                    wsprintfW(g_statusMsg, L"Launching Factory Vendor UI (Launch.exe)...");
-                    InvalidateRect(g_hWnd, NULL, FALSE);
-                    UpdateWindow(g_hWnd);
-                    LaunchVendorUI();
+                case 1: /* Toggle USB Storage Mode */
+                    ToggleUsbMode();
                     break;
 
                 case 2: /* Volume Toggle */
@@ -1017,6 +1086,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         UpdateSystemStatus();
         SetMasterVolume(g_volumeLevel);
         QueryCurrentBootTarget();
+        QueryCurrentUsbMode();
         UpdateButtons();
         LoadConfig();
         if (GetFileAttributesW(L"\\SDMMC\\MERO\\launch_strings.txt") == 0xFFFFFFFF) {
