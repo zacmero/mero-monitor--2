@@ -427,6 +427,19 @@ static BOOL PollSerialNowPlaying(void)
 
     if (gotPacket) {
         g_lastSerialRxTime = GetTickCount();
+
+        /* Reload cover art whenever title changes (serial path never did this before) */
+        if (lstrcmpW(g_title, g_lastTrackTitle) != 0) {
+            lstrcpynW(g_lastTrackTitle, g_title, 128);
+            if (GetFileAttributesW(COVER_FILE_SDMMC) != 0xFFFFFFFF)
+                LoadCoverArt(COVER_FILE_SDMMC);
+            else if (GetFileAttributesW(COVER_FILE_FLASH) != 0xFFFFFFFF)
+                LoadCoverArt(COVER_FILE_FLASH);
+        } else if (!g_hasCover) {
+            if (GetFileAttributesW(COVER_FILE_SDMMC) != 0xFFFFFFFF)
+                LoadCoverArt(COVER_FILE_SDMMC);
+        }
+
         InvalidateRect(g_hWnd, NULL, FALSE);
     }
     return gotPacket;

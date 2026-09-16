@@ -31,6 +31,7 @@ last_processed_cmd = ""
 serial_fd = None
 rx_serial_buf = ""
 last_serial_send_time = 0.0
+_last_now_playing_content = b""
 
 def run_cmd(cmd):
     try:
@@ -402,7 +403,8 @@ def check_storage_commands(sd_mount, player):
             print(f"[!] Error processing command file {cmd_file}: {e}")
 
 def write_now_playing(sd_mount, media):
-    """Write now_playing.txt synchronously without changing file clusters."""
+    """Write now_playing.txt only when content changed to minimize FAT32 write contention."""
+    global _last_now_playing_content
     if not sd_mount or not media:
         return
 
@@ -421,6 +423,10 @@ def write_now_playing(sd_mount, media):
         f"cover=\\SDMMC\\Stream\\cover.jpg\r\n"
     ).encode("utf-8")
 
+    if content == _last_now_playing_content:
+        return
+    _last_now_playing_content = content
+
     for target in [stream_dir / "now_playing.txt", mero_dir / "now_playing.txt"]:
         try:
             fd = os.open(str(target), os.O_WRONLY | os.O_CREAT | os.O_SYNC, 0o666)
@@ -433,6 +439,7 @@ def write_now_playing(sd_mount, media):
                 target.write_bytes(content)
             except Exception:
                 pass
+
 
 def main():
     global active_player, last_title, last_status, last_art_url
