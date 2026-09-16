@@ -3,13 +3,12 @@
  * Target: Foston FS-460BT (PE32 ARMv4 Windows CE 5.0, Samsung S3C2440 400 MHz)
  * Screen: 480x272 16bpp TFT LCD
  *
- * Ultra-optimized:
- * - Integer fixed-point scaler (ZERO software floating point emulation in render loop)
- * - RGBA 4-channel decode with direct 32bpp DIB memory blit
- * - Full JPEG integrity check (FFD8...FFD9) preventing partial reads
- * - Independent of FAT32 2-second timestamp caching
- * - Reliable integer-bounds touch buttons
- * - Single-pass double-buffered atomic paint (no flicker/stripes)
+ * Hardened & Crash-Proof:
+ * - 16bpp Compatible Backbuffer for all GDI text and HUD drawing (never draws text onto 32bpp DIB)
+ * - Zero FlushFileBuffers (FAT32 driver safe)
+ * - Integer 16.16 fixed-point scaler (zero software floating-point emulation)
+ * - JPEG SOI/EOI (FFD8...FFD9) integrity check before decoding
+ * - Direct integer-bounds touch button hit tests
  */
 
 #define WIN32_LEAN_AND_MEAN
@@ -42,18 +41,11 @@
 static HWND       g_hWnd        = NULL;
 static HINSTANCE  g_hInst       = NULL;
 
-/* Double-buffered DIB Section */
+/* 32bpp DIB Section for video frame decoding */
 static HBITMAP    g_hDIB        = NULL;
 static DWORD     *g_pBits       = NULL;
 static HDC        g_memDC       = NULL;
 static HBITMAP    g_hOldBmp     = NULL;
-
-/* UI Resources */
-static HFONT      g_hFontSmall  = NULL;
-static HFONT      g_hFontBold   = NULL;
-static HBRUSH     g_hBarBrush   = NULL;
-static HBRUSH     g_hBtnBrush   = NULL;
-static HBRUSH     g_hRecBrush   = NULL;
 
 /* App State */
 static BOOL       g_hasFrame    = FALSE;
@@ -71,32 +63,26 @@ static WCHAR      g_statusMsg[128] = L"Connecting to DarkHorse Cam...";
 
 /* Touch Button Definitions */
 typedef struct {
-    int left, top, right, bottom;
+    RECT   rc;
     const WCHAR *label;
     const char  *cmd;
 } CamButton;
 
 #define NUM_BUTTONS 8
-static CamButton g_buttons[NUM_BUTTONS] = {
-    {   2, 230,  58, 270, L"SNAP",    "SNAP"    },
-    {  62, 230, 118, 270, L"REC",     "REC"     },
-    { 122, 230, 178, 270, L"PREV",   "PREVIEW" },
-    { 182, 230, 226, 270, L"B -",    "BRT_DN"  },
-    { 230, 230, 274, 270, L"B +",    "BRT_UP"  },
-    { 278, 230, 322, 270, L"C -",    "CTR_DN"  },
-    { 326, 230, 370, 270, L"C +",    "CTR_UP"  },
-    { 376, 230, 478, 270, L"EXIT",   "EXIT"    }
-};
+static CamButton g_buttons[NUM_BUTTONS];
 
-/* ------------------------------------------------------------------ */
-static HFONT MakeFont(int height, int weight)
+static void InitButtons(void)
 {
-    LOGFONTW lf;
-    memset(&lf, 0, sizeof(lf));
-    lf.lfHeight = height;
-    lf.lfWeight = weight;
-    lstrcpyW(lf.lfFaceName, L"Tahoma");
-    return CreateFontIndirectW(&lf);
+    int yT = 232;
+    int yB = 270;
+    g_buttons[0] = (CamButton){ {   4, yT,  58, yB }, L"SNAP",  "SNAP"    };
+    g_buttons[1] = (CamButton){ {  62, yT, 116, yB }, L"REC",   "REC"     };
+    g_buttons[2] = (CamButton){ { 120, yT, 174, yB }, L"PREV",  "PREVIEW" };
+    g_buttons[3] = (CamButton){ { 178, yT, 222, yB }, L"B -",   "BRT_DN"  };
+    g_buttons[4] = (CamButton){ { 226, yT, 270, yB }, L"B +",   "BRT_UP"  };
+    g_buttons[5] = (CamButton){ { 274, yT, 318, yB }, L"C -",   "CTR_DN"  };
+    g_buttons[6] = (CamButton){ { 322, yT, 366, yB }, L"C +",   "CTR_UP"  };
+    g_buttons[7] = (CamButton){ { 372, yT, 476, yB }, L"EXIT",  "EXIT"    };
 }
 
 /* ------------------------------------------------------------------ */
@@ -114,8 +100,7 @@ static void SendCamCommand(const char *cmd)
     if (h != INVALID_HANDLE_VALUE) {
         DWORD written = 0;
         WriteFile(h, payload, (DWORD)strlen(payload), &written, NULL);
-        FlushFileBuffers(h);
-        CloseHandle(h);
+        CloseHandle(h); /* No FlushFileBuffers on WinCE */
     }
 
     h = CreateFileW(CMD_FILE_MERO, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
@@ -123,8 +108,7 @@ static void SendCamCommand(const char *cmd)
     if (h != INVALID_HANDLE_VALUE) {
         DWORD written = 0;
         WriteFile(h, payload, (DWORD)strlen(payload), &written, NULL);
-        FlushFileBuffers(h);
-        CloseHandle(h);
+        CloseHandle(h); /* No FlushFileBuffers on WinCE */
     }
 }
 
@@ -152,6 +136,8 @@ static BOOL InitDIB(HDC hdc)
 /* ------------------------------------------------------------------ */
 static void RenderFrame(const unsigned char *pixels, int srcW, int srcH)
 {
+    if (!g_pBits) return;
+
     if (srcW == SCREEN_W && srcH == SCREEN_H) {
         /* Direct 1:1 pixel copy: 480x272 RGBA -> 32bpp DIB (0.5 ms) */
         int i;
@@ -160,7 +146,7 @@ static void RenderFrame(const unsigned char *pixels, int srcW, int srcH)
             g_pBits[i] = ((DWORD)p[0] << 16) | ((DWORD)p[1] << 8) | (DWORD)p[2];
         }
     } else {
-        /* High-speed integer fixed-point 16.16 scaler */
+        /* Integer fixed-point 16.16 scaler */
         int stepX = (srcW << 16) / SCREEN_W;
         int stepY = (srcH << 16) / SCREEN_H;
         int y, x;
@@ -217,19 +203,27 @@ static void PollStatusFile(void)
 }
 
 /* ------------------------------------------------------------------ */
-/* Draw HUD directly into the memory DC for atomic flicker-free paint */
+/* Draw HUD and touch buttons onto native 16bpp backbuffer DC         */
 /* ------------------------------------------------------------------ */
-static void ComposeHUD(HDC hdc)
+static void DrawHUD(HDC backDC)
 {
     if (!g_showOsd) return;
 
-    /* Top Status Bar (Y: 0..24) */
+    /* Top HUD banner (Dark Cyberpunk Slate) */
     RECT rcTop = { 0, 0, SCREEN_W, 24 };
-    FillRect(hdc, &rcTop, g_hBarBrush);
+    HBRUSH hBrTop = CreateSolidBrush(RGB(10, 15, 20));
+    FillRect(backDC, &rcTop, hBrTop);
+    DeleteObject(hBrTop);
 
-    SelectObject(hdc, g_hFontSmall);
-    SetBkMode(hdc, TRANSPARENT);
-    SetTextColor(hdc, RGB(0, 230, 255));
+    HPEN hPenTop = CreatePen(PS_SOLID, 1, RGB(0, 180, 100));
+    HPEN hOldPen = (HPEN)SelectObject(backDC, hPenTop);
+    MoveToEx(backDC, 0, 24, NULL);
+    LineTo(backDC, SCREEN_W, 24);
+    SelectObject(backDC, hOldPen);
+    DeleteObject(hPenTop);
+
+    SetBkMode(backDC, TRANSPARENT);
+    SetTextColor(backDC, g_isRecording ? RGB(255, 60, 60) : RGB(0, 255, 128));
 
     WCHAR topText[160];
     wsprintfW(topText, L"DARKHORSE OV7660 // %s // B:%d C:%d // %s",
@@ -237,31 +231,53 @@ static void ComposeHUD(HDC hdc)
               g_brightness, g_contrast,
               g_statusMsg);
 
-    ExtTextOutW(hdc, 8, 4, 0, NULL, topText, lstrlenW(topText), NULL);
+    ExtTextOutW(backDC, 8, 4, 0, NULL, topText, lstrlenW(topText), NULL);
 
-    /* Bottom Touch Controls Bar (Y: 228..272) */
+    /* Bottom Touch Dock (Y: 228..272) */
     RECT rcBot = { 0, 228, SCREEN_W, SCREEN_H };
-    FillRect(hdc, &rcBot, g_hBarBrush);
+    HBRUSH hBrBot = CreateSolidBrush(RGB(10, 15, 20));
+    FillRect(backDC, &rcBot, hBrBot);
+    DeleteObject(hBrBot);
 
-    SelectObject(hdc, g_hFontBold);
+    HPEN hPenBot = CreatePen(PS_SOLID, 1, RGB(40, 70, 90));
+    hOldPen = (HPEN)SelectObject(backDC, hPenBot);
+    MoveToEx(backDC, 0, 228, NULL);
+    LineTo(backDC, SCREEN_W, 228);
+    SelectObject(backDC, hOldPen);
+    DeleteObject(hPenBot);
+
     int i;
     for (i = 0; i < NUM_BUTTONS; i++) {
-        HBRUSH hB = g_hBtnBrush;
-        COLORREF txtColor = RGB(220, 220, 220);
+        COLORREF colBg  = RGB(25, 35, 45);
+        COLORREF colTxt = RGB(220, 220, 220);
+        COLORREF colBdr = RGB(50, 80, 100);
 
         if (strcmp(g_buttons[i].cmd, "REC") == 0 && g_isRecording) {
-            hB = g_hRecBrush;
-            txtColor = RGB(255, 255, 255);
+            colBg  = RGB(180, 20, 20);
+            colTxt = RGB(255, 255, 255);
+            colBdr = RGB(255, 60, 60);
         } else if (strcmp(g_buttons[i].cmd, "PREVIEW") == 0 && g_isPreview) {
-            txtColor = RGB(0, 255, 128);
+            colTxt = RGB(0, 255, 128);
+            colBdr = RGB(0, 200, 100);
         } else if (strcmp(g_buttons[i].cmd, "EXIT") == 0) {
-            txtColor = RGB(255, 90, 90);
+            colTxt = RGB(255, 90, 90);
+            colBdr = RGB(160, 40, 40);
         }
 
-        RECT rcBtn = { g_buttons[i].left, g_buttons[i].top, g_buttons[i].right, g_buttons[i].bottom };
-        FillRect(hdc, &rcBtn, hB);
-        SetTextColor(hdc, txtColor);
-        DrawTextW(hdc, g_buttons[i].label, -1, &rcBtn, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        HBRUSH hBtnBr = CreateSolidBrush(colBg);
+        FillRect(backDC, &g_buttons[i].rc, hBtnBr);
+        DeleteObject(hBtnBr);
+
+        HPEN hBtnPen = CreatePen(PS_SOLID, 1, colBdr);
+        HPEN hOldP = (HPEN)SelectObject(backDC, hBtnPen);
+        Rectangle(backDC, g_buttons[i].rc.left, g_buttons[i].rc.top,
+                  g_buttons[i].rc.right, g_buttons[i].rc.bottom);
+        SelectObject(backDC, hOldP);
+        DeleteObject(hBtnPen);
+
+        SetTextColor(backDC, colTxt);
+        DrawTextW(backDC, g_buttons[i].label, -1, &g_buttons[i].rc,
+                  DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
 }
 
@@ -292,7 +308,7 @@ static void PollCamFrame(void)
     }
 
     DWORD fileSize = GetFileSize(hFile, NULL);
-    if (fileSize < 500 || fileSize > 1024 * 1024) {
+    if (fileSize < 500 || fileSize > 512 * 1024) {
         CloseHandle(hFile);
         return;
     }
@@ -315,12 +331,11 @@ static void PollCamFrame(void)
     /* Verify complete JPEG frame markers: SOI (FFD8) and EOI (FFD9) */
     if (buf[0] != 0xFF || buf[1] != 0xD8 ||
         buf[bytesRead - 2] != 0xFF || buf[bytesRead - 1] != 0xD9) {
-        /* File was being written — skip corrupt/partial frame */
         free(buf);
         return;
     }
 
-    /* Fast hash check to skip decode if frame is identical */
+    /* Fast hash check to skip decode if frame has not changed */
     DWORD hash = (bytesRead ^ ((DWORD)buf[10] << 16) ^ ((DWORD)buf[bytesRead / 2] << 8) ^ buf[bytesRead - 5]);
     if (hash == g_lastFileHash && g_hasFrame) {
         free(buf);
@@ -329,11 +344,14 @@ static void PollCamFrame(void)
     g_lastFileHash = hash;
 
     /* Decode as 4 channels (RGBA 32bpp) */
-    int w, h, ch;
+    int w = 0, h = 0, ch = 0;
     unsigned char *pixels = stbi_load_from_memory(buf, (int)bytesRead, &w, &h, &ch, 4);
     free(buf);
 
-    if (!pixels || w <= 0 || h <= 0) return;
+    if (!pixels || w <= 0 || h <= 0) {
+        if (pixels) stbi_image_free(pixels);
+        return;
+    }
 
     RenderFrame(pixels, w, h);
     stbi_image_free(pixels);
@@ -348,16 +366,11 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
     {
     case WM_CREATE:
     {
+        g_hWnd = hWnd;
+        InitButtons();
+
         HDC hdc = GetDC(hWnd);
         InitDIB(hdc);
-
-        g_hFontSmall = MakeFont(14, FW_NORMAL);
-        g_hFontBold  = MakeFont(15, FW_BOLD);
-
-        g_hBarBrush  = CreateSolidBrush(RGB(15, 18, 22));
-        g_hBtnBrush  = CreateSolidBrush(RGB(35, 42, 50));
-        g_hRecBrush  = CreateSolidBrush(RGB(180, 20, 20));
-
         ReleaseDC(hWnd, hdc);
 
         if (g_pBits) memset(g_pBits, 0, SCREEN_W * SCREEN_H * 4);
@@ -379,12 +392,34 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
     {
         PAINTSTRUCT ps;
         HDC hdc = BeginPaint(hWnd, &ps);
-        if (g_memDC && g_hDIB) {
-            /* Compose HUD onto memory DC first */
-            ComposeHUD(g_memDC);
-            /* Atomic single-blit to screen eliminates all tearing and glitched stripes */
-            BitBlt(hdc, 0, 0, SCREEN_W, SCREEN_H, g_memDC, 0, 0, SRCCOPY);
+
+        /* Standard WinCE double buffer pattern: native 16bpp compatible backbuffer */
+        HDC backDC = CreateCompatibleDC(hdc);
+        HBITMAP backBmp = CreateCompatibleBitmap(hdc, SCREEN_W, SCREEN_H);
+        HBITMAP oldBackBmp = (HBITMAP)SelectObject(backDC, backBmp);
+
+        /* 1. Copy decoded video frame from g_memDC onto backDC */
+        if (g_hasFrame && g_memDC && g_hDIB) {
+            BitBlt(backDC, 0, 0, SCREEN_W, SCREEN_H, g_memDC, 0, 0, SRCCOPY);
+        } else {
+            RECT rcFull = { 0, 0, SCREEN_W, SCREEN_H };
+            HBRUSH hBlk = (HBRUSH)GetStockObject(BLACK_BRUSH);
+            FillRect(backDC, &rcFull, hBlk);
+            SetBkMode(backDC, TRANSPARENT);
+            SetTextColor(backDC, RGB(0, 220, 100));
+            ExtTextOutW(backDC, 20, 110, 0, NULL, L"WAITING FOR DARKHORSE CAM FEED...", 33, NULL);
         }
+
+        /* 2. Compose HUD and buttons onto native backDC */
+        DrawHUD(backDC);
+
+        /* 3. Atomic single-blit to screen */
+        BitBlt(hdc, 0, 0, SCREEN_W, SCREEN_H, backDC, 0, 0, SRCCOPY);
+
+        SelectObject(backDC, oldBackBmp);
+        DeleteObject(backBmp);
+        DeleteDC(backDC);
+
         EndPaint(hWnd, &ps);
         return 0;
     }
@@ -398,8 +433,8 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
             /* Check button click with foolproof integer bounds */
             int i;
             for (i = 0; i < NUM_BUTTONS; i++) {
-                if (x >= g_buttons[i].left && x <= g_buttons[i].right &&
-                    y >= g_buttons[i].top  && y <= g_buttons[i].bottom) {
+                if (x >= g_buttons[i].rc.left && x <= g_buttons[i].rc.right &&
+                    y >= g_buttons[i].rc.top  && y <= g_buttons[i].rc.bottom) {
 
                     if (strcmp(g_buttons[i].cmd, "EXIT") == 0) {
                         SendCamCommand("STOP");
@@ -440,11 +475,6 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
             DeleteDC(g_memDC);
         }
         if (g_hDIB) DeleteObject(g_hDIB);
-        if (g_hFontSmall) DeleteObject(g_hFontSmall);
-        if (g_hFontBold)  DeleteObject(g_hFontBold);
-        if (g_hBarBrush)  DeleteObject(g_hBarBrush);
-        if (g_hBtnBrush)  DeleteObject(g_hBtnBrush);
-        if (g_hRecBrush)  DeleteObject(g_hRecBrush);
         PostQuitMessage(0);
         return 0;
 
