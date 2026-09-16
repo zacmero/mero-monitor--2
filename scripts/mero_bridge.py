@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """
-mero_bridge.py - Unified Host Bridge for Mero Monitor #2
-Single unified companion daemon for Windows CE deck:
-  1. Media Deck: YouTube Music / MPRIS playback, metadata, and volume control
-  2. DarkHorse Webcam: On-demand video streaming (scaled 480x272), snapshots,
-     whine-filtered recording (FIR notch filter), desktop preview, and v4l2 tuning.
+mero_bridge.py - Unified Host Bridge for Mero Companion Deck
+Project: mero-monitor-#2
+Features:
+  1. YouTube Music / MPRIS: Real-time metadata, title, artist, album, progress, duration, cover art
+  2. Cyberpunk Meteorological Telemetry: Live weather, humidity, wind, pressure, UV, 3-day forecast (wttr.in)
+  3. Dual-Transport: Direct in-place SDMMC FAT32 storage sync + optional ActiveSync serial stream (/dev/ttyUSB0)
 """
 
 import os
 import sys
 import time
+import json
 import shutil
-import select
-import termios
 import datetime
 import urllib.request
 import subprocess
@@ -21,31 +21,23 @@ from pathlib import Path
 DEFAULT_MOUNT = Path("/run/media/zacmero/6232-3562")
 DEV_UUID = "6232-3562"
 SERIAL_PORT = "/dev/ttyUSB0"
-VIDEO_DEV = "/dev/video0"
-AUDIO_SRC = "alsa_input.pci-0000_00_1b.0.analog-stereo"
-AUDIO_FILTER = "highpass=f=100,firequalizer=gain_entry='entry(0,0);entry(7000,0);entry(7500,-80);entry(24000,-80)',afftdn=nf=-20"
 
 # Media state
 last_art_url = ""
 last_title = ""
 last_status = ""
 active_player = ""
-last_media_seq = -1
-last_media_cmd = ""
-serial_fd = None
-rx_serial_buf = ""
-last_serial_send_time = 0.0
 _last_now_playing_content = b""
 
-# Camera state
-last_cam_seq = -1
-last_cam_cmd = ""
-is_cam_streaming = False
-is_cam_recording = False
-is_cam_preview = False
-cam_ffmpeg_proc = None
-cam_preview_proc = None
-last_cam_heartbeat = 0.0
+# Weather state
+last_weather_fetch = 0.0
+WEATHER_INTERVAL = 600.0  # 10 minutes
+cached_weather_content = ""
+
+# Serial connection state
+serial_fd = None
+last_serial_send_time = 0.0
+
 
 def run_cmd(cmd):
     try:
@@ -53,6 +45,7 @@ def run_cmd(cmd):
         return res.stdout.strip()
     except Exception:
         return ""
+
 
 def find_sd_mount():
     """Locate or auto-mount the SD card mount containing the MERO directory."""
@@ -75,6 +68,138 @@ def find_sd_mount():
                 if p.is_dir() and (p / "MERO").exists():
                     return p
     return None
+
+
+# ====================================================================
+# SERIAL PORT STREAMING (ActiveSync mode)
+# ====================================================================
+def init_serial():
+    global serial_fd
+    if not os.path.exists(SERIAL_PORT):
+        if serial_fd is not None:
+            try:
+                os.close(serial_fd)
+            except Exception:
+                pass
+            serial_fd = None
+        return None
+
+    if serial_fd is not None:
+        return serial_fd
+
+    try:
+        import termios
+
+        fd = os.open(SERIAL_PORT, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+        attrs = termios.tcgetattr(fd)
+        attrs[4] = termios.B115200
+        attrs[5] = termios.B115200
+        attrs[0] = 0
+        attrs[1] = 0
+        attrs[2] = termios.CS8 | termios.CREAD | termios.CLOCAL
+        attrs[3] = 0
+        termios.tcsetattr(fd, termios.TCSANOW, attrs)
+        serial_fd = fd
+        print(f"[+] Connected to ActiveSync serial port: {SERIAL_PORT}")
+        return serial_fd
+    except Exception as e:
+        serial_fd = None
+        return None
+
+
+def send_serial(line):
+    global serial_fd
+    fd = init_serial()
+    if fd is None:
+        return
+    try:
+        data = (line.strip() + "\n").encode("utf-8")
+        os.write(fd, data)
+    except Exception:
+        try:
+            os.close(fd)
+        except Exception:
+            pass
+        serial_fd = None
+
+
+# ====================================================================
+# WEATHER TELEMETRY (wttr.in)
+# ====================================================================
+def fetch_weather(sd_mount=None):
+    global last_weather_fetch, cached_weather_content
+    now = time.time()
+    if cached_weather_content and (now - last_weather_fetch) < WEATHER_INTERVAL:
+        return cached_weather_content
+
+    try:
+        req = urllib.request.Request(
+            "https://wttr.in/?format=j1",
+            headers={"User-Agent": "curl/7.88.1 (Mero-Companion-Deck)"}
+        )
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+
+        cc = data["current_condition"][0]
+        area = data["nearest_area"][0]
+        loc = f"{area['areaName'][0]['value']}, {area['region'][0]['value']} [BR]"
+        w = data["weather"]
+
+        content = (
+            f"location={loc}\n"
+            f"coord=LAT -29.36 | LON -50.81\n"
+            f"desc={cc['weatherDesc'][0]['value']}\n"
+            f"temp_c={cc['temp_C']}\n"
+            f"feels_like={cc['FeelsLikeC']}\n"
+            f"humidity={cc['humidity']}\n"
+            f"wind={cc['windspeedKmph']} km/h {cc['winddir16Point']}\n"
+            f"pressure={cc['pressure']} hPa\n"
+            f"precip={cc['precipMM']} mm\n"
+            f"uv={cc['uvIndex']}\n"
+            f"updated={cc['observation_time']}\n"
+            f"d1_name=TODAY\n"
+            f"d1_desc={w[0]['hourly'][4]['weatherDesc'][0]['value']}\n"
+            f"d1_min={w[0]['mintempC']}\n"
+            f"d1_max={w[0]['maxtempC']}\n"
+            f"d2_name=TOMORROW\n"
+            f"d2_desc={w[1]['hourly'][4]['weatherDesc'][0]['value']}\n"
+            f"d2_min={w[1]['mintempC']}\n"
+            f"d2_max={w[1]['maxtempC']}\n"
+            f"d3_name=DAY+2\n"
+            f"d3_desc={w[2]['hourly'][4]['weatherDesc'][0]['value']}\n"
+            f"d3_min={w[2]['mintempC']}\n"
+            f"d3_max={w[2]['maxtempC']}\n"
+        )
+
+        cached_weather_content = content
+        last_weather_fetch = now
+
+        # Write to SD card in-place
+        if sd_mount:
+            dest = sd_mount / "MERO" / "weather.txt"
+            try:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                with open(dest, "w", encoding="utf-8") as f:
+                    f.write(content)
+                    f.flush()
+                os.sync()
+            except Exception as e:
+                print(f"[!] Weather write error: {e}")
+
+        # Broadcast over serial
+        wx_line = (
+            f"MERO:WX:temp={cc['temp_C']}|feels={cc['FeelsLikeC']}|hum={cc['humidity']}|"
+            f"cond={cc['weatherDesc'][0]['value']}|wind={cc['windspeedKmph']} km/h {cc['winddir16Point']}|"
+            f"press={cc['pressure']} hPa|precip={cc['precipMM']} mm|uv={cc['uvIndex']}|up={cc['observation_time']}"
+        )
+        send_serial(wx_line)
+        print(f"[+] Weather updated: {loc} -> {cc['temp_C']}°C ({cc['weatherDesc'][0]['value']})")
+        return content
+
+    except Exception as e:
+        print(f"[!] Weather fetch error: {e}")
+        return cached_weather_content
+
 
 # ====================================================================
 # MEDIA CONTROLLER (YouTube Music / MPRIS)
@@ -103,6 +228,7 @@ def find_target_player():
             return p
 
     return players[0]
+
 
 def get_media_status(player):
     if not player:
@@ -150,6 +276,7 @@ def get_media_status(player):
         "position": pos_sec
     }
 
+
 def extract_video_id(track_url):
     if not track_url:
         return ""
@@ -160,6 +287,7 @@ def extract_video_id(track_url):
             if vid:
                 return vid
     return ""
+
 
 def update_artwork(art_url, sd_mount, track_url=""):
     global last_art_url
@@ -179,126 +307,56 @@ def update_artwork(art_url, sd_mount, track_url=""):
     if not cache_key or cache_key == last_art_url:
         return
 
-    tmp_raw = Path("/tmp/mero_cover_raw")
-    tmp_out = Path("/tmp/mero_cover.jpg")
+    dest_mero = sd_mount / "MERO" / "cover.jpg"
+    dest_mero.parent.mkdir(parents=True, exist_ok=True)
 
-    try:
-        fetched = False
-        for url in filter(None, [cdn_url, fallback_url, art_url if art_url.startswith("http") else ""]):
-            if not url:
-                continue
+    fetched = False
+    if cdn_url.startswith("http"):
+        try:
+            req = urllib.request.Request(cdn_url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = resp.read()
+                if len(data) > 2000:
+                    with open(dest_mero, "wb") as f:
+                        f.write(data)
+                        f.flush()
+                    os.sync()
+                    last_art_url = cache_key
+                    print(f"[+] Downloaded YouTube HD cover art: {len(data)} bytes")
+                    fetched = True
+        except Exception:
+            pass
+
+        if not fetched and fallback_url:
             try:
-                req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+                req = urllib.request.Request(fallback_url, headers={"User-Agent": "Mozilla/5.0"})
                 with urllib.request.urlopen(req, timeout=5) as resp:
                     data = resp.read()
-                    if len(data) > 500:
-                        tmp_raw.write_bytes(data)
+                    if len(data) > 1000:
+                        with open(dest_mero, "wb") as f:
+                            f.write(data)
+                            f.flush()
+                        os.sync()
+                        last_art_url = cache_key
+                        print(f"[+] Downloaded YouTube HQ cover art: {len(data)} bytes")
                         fetched = True
-                        break
             except Exception:
-                continue
+                pass
 
-        if not fetched and art_url.startswith("file://"):
-            local_path = art_url[7:]
-            if os.path.exists(local_path):
-                shutil.copyfile(local_path, tmp_raw)
-                fetched = True
-
-        if fetched and tmp_raw.exists():
-            subprocess.run(
-                f'ffmpeg -y -i "{tmp_raw}" -vf "scale=180:180:force_original_aspect_ratio=increase,crop=180:180" -q:v 2 "{tmp_out}" -loglevel quiet',
-                shell=True, timeout=5
-            )
-            if tmp_out.exists():
-                mero_dir = sd_mount / "MERO"
-                mero_dir.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(tmp_out, mero_dir / "cover.jpg")
-
-                # Purge any cover.jpg in Stream so slideshow is NEVER polluted
-                stream_cover = sd_mount / "Stream" / "cover.jpg"
-                if stream_cover.exists():
-                    try:
-                        stream_cover.unlink()
-                    except Exception:
-                        pass
-
+    elif cdn_url.startswith("file://"):
+        local_path = Path(cdn_url.replace("file://", ""))
+        if local_path.exists():
+            try:
+                shutil.copyfile(local_path, dest_mero)
+                os.sync()
                 last_art_url = cache_key
-                src = "YT CDN" if video_id else "MPRIS"
-                print(f"[+] Album art updated ({src}, vid={video_id or 'n/a'}) -> MERO/cover.jpg")
-    except Exception as e:
-        print(f"[!] Artwork fetch error: {e}")
+                print(f"[+] Copied local cover art: {local_path.name}")
+            except Exception:
+                pass
 
-def execute_transport_command(cmd, player):
-    p_flag = f'-p "{player}" ' if player else ""
-    print(f"[+] MEDIA CMD: '{cmd}' -> Player: {player}")
-    if cmd == "PLAY_PAUSE":
-        run_cmd(f"playerctl {p_flag}play-pause")
-    elif cmd == "NEXT":
-        run_cmd(f"playerctl {p_flag}next")
-    elif cmd == "PREV":
-        run_cmd(f"playerctl {p_flag}previous")
-    elif cmd == "VOL_UP":
-        run_cmd("wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%+")
-    elif cmd == "VOL_DOWN":
-        run_cmd("wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-")
-
-def check_media_storage_commands(sd_mount, player):
-    global last_media_seq, last_media_cmd
-    if not sd_mount:
-        return
-
-    cmd_files = [sd_mount / "MERO" / "media_cmd.txt", sd_mount / "Stream" / "media_cmd.txt"]
-    for cmd_file in cmd_files:
-        if not cmd_file.exists():
-            continue
-        try:
-            raw = cmd_file.read_text(encoding="utf-8", errors="ignore").strip()
-            if not raw or "PROCESSED" in raw or "IDLE" in raw:
-                continue
-
-            cmd = ""
-            seq = None
-            for line in raw.splitlines():
-                line = line.strip()
-                if line.startswith("seq="):
-                    try:
-                        seq = int(line.split("=", 1)[1])
-                    except ValueError:
-                        pass
-                elif line.startswith("cmd="):
-                    cmd = line.split("=", 1)[1].strip()
-
-            if not cmd and (raw.isalnum() or "_" in raw):
-                cmd = raw
-
-            if not cmd:
-                continue
-
-            is_new = False
-            if seq is not None:
-                if seq != last_media_seq:
-                    is_new = True
-                    last_media_seq = seq
-            else:
-                if cmd != last_media_cmd:
-                    is_new = True
-                    last_media_cmd = cmd
-
-            if is_new:
-                execute_transport_command(cmd, player)
-                for cf in cmd_files:
-                    if cf.exists():
-                        try:
-                            cf.write_text(f"seq={seq or 0}\ncmd=PROCESSED\n", encoding="utf-8")
-                        except Exception:
-                            pass
-        except Exception as e:
-            print(f"[!] Media command error: {e}")
 
 def write_now_playing(sd_mount, media):
-    global _last_now_playing_content
-    if not sd_mount or not media:
-        return
+    global _last_now_playing_content, last_serial_send_time
 
     content = (
         f"title={media['title']}\r\n"
@@ -310,311 +368,69 @@ def write_now_playing(sd_mount, media):
         f"cover=\\SDMMC\\MERO\\cover.jpg\r\n"
     ).encode("utf-8")
 
-    if content == _last_now_playing_content:
-        return
-    _last_now_playing_content = content
-
-    for target in [sd_mount / "Stream" / "now_playing.txt", sd_mount / "MERO" / "now_playing.txt"]:
+    now = time.time()
+    # Write to SD card in-place if changed or periodically
+    if content != _last_now_playing_content:
+        dest_mero = sd_mount / "MERO" / "now_playing.txt"
         try:
-            fd = os.open(str(target), os.O_WRONLY | os.O_CREAT | os.O_SYNC, 0o666)
-            os.lseek(fd, 0, os.SEEK_SET)
-            os.write(fd, content)
-            os.ftruncate(fd, len(content))
-            os.close(fd)
-        except Exception:
-            pass
-
-# ====================================================================
-# DARKHORSE WEBCAM CONTROLLER (On-Demand)
-# ====================================================================
-def get_v4l2_control(name):
-    out = run_cmd(f"v4l2-ctl -d {VIDEO_DEV} --get-ctrl={name} 2>/dev/null")
-    if ":" in out:
-        try:
-            return int(out.split(":")[1].strip())
-        except ValueError:
-            pass
-    return 128
-
-def set_v4l2_control(name, val):
-    val = max(0, min(255, val))
-    run_cmd(f"v4l2-ctl -d {VIDEO_DEV} --set-ctrl={name}={val} 2>/dev/null")
-    return val
-
-def stop_cam_stream():
-    global cam_ffmpeg_proc, is_cam_streaming, is_cam_recording
-    if cam_ffmpeg_proc is not None:
-        try:
-            cam_ffmpeg_proc.terminate()
-            cam_ffmpeg_proc.wait(timeout=2)
-        except Exception:
-            try:
-                cam_ffmpeg_proc.kill()
-            except Exception:
-                pass
-        cam_ffmpeg_proc = None
-    is_cam_streaming = False
-    is_cam_recording = False
-    print("[*] DarkHorse camera stream stopped (hardware released).")
-
-def start_cam_stream(sd_mount, record=False):
-    global cam_ffmpeg_proc, is_cam_streaming, is_cam_recording
-    stop_cam_stream()
-
-    if not os.path.exists(VIDEO_DEV):
-        print(f"[!] Error: {VIDEO_DEV} not connected.")
-        return False
-
-    stream_dir = sd_mount / "Stream"
-    stream_dir.mkdir(parents=True, exist_ok=True)
-    out_cam = str(stream_dir / "cam.jpg")
-
-    # Native capture 636x476 scaled directly on host CPU to 480x272 TFT LCD geometry!
-    # WinCE decodes 480x272 directly with zero floating-point software scaling!
-    if record:
-        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        rec_path = os.path.expanduser(f"~/webcam_recording_{ts}.mp4")
-        cmd = [
-            "ffmpeg", "-loglevel", "error", "-y",
-            "-thread_queue_size", "1024", "-f", "v4l2",
-            "-input_format", "yuyv422", "-video_size", "636x476", "-i", VIDEO_DEV,
-            "-thread_queue_size", "1024", "-f", "pulse", "-i", AUDIO_SRC,
-            "-vf", "scale=480:272", "-r", "4", "-update", "1", "-atomic_writing", "1", "-q:v", "3", out_cam,
-            "-c:v", "libx264", "-pix_fmt", "yuv420p",
-            "-af", AUDIO_FILTER,
-            "-c:a", "aac", "-b:a", "192k", rec_path
-        ]
-        is_cam_recording = True
-        print(f"[+] Cam Recording STARTED -> {rec_path}")
-    else:
-        cmd = [
-            "ffmpeg", "-loglevel", "error", "-y",
-            "-f", "v4l2", "-input_format", "yuyv422", "-video_size", "636x476", "-i", VIDEO_DEV,
-            "-vf", "scale=480:272", "-r", "4", "-update", "1", "-atomic_writing", "1", "-q:v", "3", out_cam
-        ]
-        is_cam_recording = False
-        print(f"[+] Cam Stream STARTED -> {out_cam} (480x272 @ 4 FPS)")
-
-    try:
-        cam_ffmpeg_proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        is_cam_streaming = True
-        return True
-    except Exception as e:
-        print(f"[!] Failed to launch camera ffmpeg: {e}")
-        return False
-
-def take_cam_snapshot(sd_mount):
-    src = sd_mount / "Stream" / "cam.jpg"
-    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    dest = os.path.expanduser(f"~/webcam_snapshot_{ts}.jpg")
-    if src.exists():
-        try:
-            shutil.copyfile(src, dest)
-            print(f"[+] Snapshot saved -> {dest}")
-            return f"Snap: {Path(dest).name}"
+            dest_mero.parent.mkdir(parents=True, exist_ok=True)
+            with open(dest_mero, "wb") as f:
+                f.write(content)
+                f.flush()
+            os.sync()
+            _last_now_playing_content = content
         except Exception as e:
-            return f"Snap err: {e}"
-    return "No frame yet"
+            print(f"[!] Storage write error: {e}")
 
-def toggle_cam_preview(sd_mount):
-    global cam_preview_proc, is_cam_preview
-    if cam_preview_proc and cam_preview_proc.poll() is None:
-        try:
-            cam_preview_proc.terminate()
-            cam_preview_proc.wait(timeout=1)
-        except Exception:
-            try:
-                cam_preview_proc.kill()
-            except Exception:
-                pass
-        cam_preview_proc = None
-        is_cam_preview = False
-        print("[*] Desktop preview closed.")
-        return "Preview Closed"
-    else:
-        cam_file = str(sd_mount / "Stream" / "cam.jpg")
-        cmd = ["mpv", "--title=DarkHorse Cam Live", "--loop=inf", "--fps=4", cam_file]
-        try:
-            cam_preview_proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            is_cam_preview = True
-            print("[+] Desktop preview opened.")
-            return "Preview Active"
-        except Exception as e:
-            return f"Preview err: {e}"
+    # Serial streaming (max 2 times per second)
+    if (now - last_serial_send_time) >= 0.5:
+        line = (
+            f"MERO:NOW:status={media['status']}|title={media['title']}|"
+            f"artist={media['artist']}|album={media['album']}|"
+            f"pos={media['position']}|len={media['length']}"
+        )
+        send_serial(line)
+        last_serial_send_time = now
 
-def write_cam_status(sd_mount, msg=""):
-    if not sd_mount:
-        return
-    brt = get_v4l2_control("brightness")
-    ctr = get_v4l2_control("contrast")
-    status_str = "RECORDING" if is_cam_recording else ("STREAMING" if is_cam_streaming else "IDLE")
-
-    payload = (
-        f"status={status_str}\r\n"
-        f"streaming={1 if is_cam_streaming else 0}\r\n"
-        f"recording={1 if is_cam_recording else 0}\r\n"
-        f"preview={1 if is_cam_preview else 0}\r\n"
-        f"brightness={brt}\r\n"
-        f"contrast={ctr}\r\n"
-        f"msg={msg}\r\n"
-    ).encode("utf-8")
-
-    for target in [sd_mount / "Stream" / "cam_status.txt", sd_mount / "MERO" / "cam_status.txt"]:
-        try:
-            fd = os.open(str(target), os.O_WRONLY | os.O_CREAT | os.O_SYNC, 0o666)
-            os.lseek(fd, 0, os.SEEK_SET)
-            os.write(fd, payload)
-            os.ftruncate(fd, len(payload))
-            os.close(fd)
-        except Exception:
-            pass
-
-def check_cam_commands(sd_mount):
-    global last_cam_seq, last_cam_cmd, last_cam_heartbeat
-    if not sd_mount:
-        return
-
-    cmd_files = [sd_mount / "Stream" / "cam_cmd.txt", sd_mount / "MERO" / "cam_cmd.txt"]
-    for cmd_file in cmd_files:
-        if not cmd_file.exists():
-            continue
-        try:
-            raw = cmd_file.read_text(encoding="utf-8", errors="ignore").strip()
-            if not raw or "PROCESSED" in raw or "IDLE" in raw:
-                continue
-
-            cmd = ""
-            seq = None
-            for line in raw.splitlines():
-                line = line.strip()
-                if line.startswith("seq="):
-                    try:
-                        seq = int(line.split("=", 1)[1])
-                    except ValueError:
-                        pass
-                elif line.startswith("cmd="):
-                    cmd = line.split("=", 1)[1].strip()
-
-            if not cmd and (raw.isalnum() or "_" in raw):
-                cmd = raw
-
-            if not cmd:
-                continue
-
-            is_new = False
-            if seq is not None:
-                if seq != last_cam_seq:
-                    is_new = True
-                    last_cam_seq = seq
-            else:
-                if cmd != last_cam_cmd:
-                    is_new = True
-                    last_cam_cmd = cmd
-
-            if is_new:
-                last_cam_heartbeat = time.time()
-                print(f"[+] CAM CMD: '{cmd}' (seq={seq})")
-                feedback = ""
-
-                if cmd in ["START", "HEARTBEAT"]:
-                    if not is_cam_streaming:
-                        start_cam_stream(sd_mount)
-                    feedback = "Live Stream"
-                elif cmd == "STOP":
-                    stop_cam_stream()
-                    feedback = "Stream Stopped"
-                elif cmd == "SNAP":
-                    feedback = take_cam_snapshot(sd_mount)
-                elif cmd == "REC":
-                    if is_cam_recording:
-                        start_cam_stream(sd_mount, record=False)
-                        feedback = "Recording Saved"
-                    else:
-                        start_cam_stream(sd_mount, record=True)
-                        feedback = "Recording..."
-                elif cmd == "PREVIEW":
-                    feedback = toggle_cam_preview(sd_mount)
-                elif cmd == "BRT_UP":
-                    cur = get_v4l2_control("brightness")
-                    set_v4l2_control("brightness", cur + 10)
-                    feedback = f"Brt: {get_v4l2_control('brightness')}"
-                elif cmd == "BRT_DN":
-                    cur = get_v4l2_control("brightness")
-                    set_v4l2_control("brightness", cur - 10)
-                    feedback = f"Brt: {get_v4l2_control('brightness')}"
-                elif cmd == "CTR_UP":
-                    cur = get_v4l2_control("contrast")
-                    set_v4l2_control("contrast", cur + 10)
-                    feedback = f"Ctr: {get_v4l2_control('contrast')}"
-                elif cmd == "CTR_DN":
-                    cur = get_v4l2_control("contrast")
-                    set_v4l2_control("contrast", cur - 10)
-                    feedback = f"Ctr: {get_v4l2_control('contrast')}"
-
-                write_cam_status(sd_mount, feedback)
-
-                for cf in cmd_files:
-                    if cf.exists():
-                        try:
-                            cf.write_text(f"seq={seq or 0}\ncmd=PROCESSED\n", encoding="utf-8")
-                        except Exception:
-                            pass
-        except Exception as e:
-            print(f"[!] Cam command error: {e}")
 
 # ====================================================================
 # MAIN BRIDGE LOOP
 # ====================================================================
 def main():
     global active_player, last_title, last_status, last_art_url
-    global last_cam_seq, last_media_seq, last_cam_heartbeat
     sys.stdout.reconfigure(line_buffering=True)
-    print("=== MERO MONITOR #2: UNIFIED HOST BRIDGE ===")
+    print("=== MERO COMPANION DECK: UNIFIED HOST DAEMON ===")
+    print("  [+] YouTube Music MPRIS View")
+    print("  [+] Cyberpunk Meteorological Telemetry (Canela, RS)")
+
     sd_mount = find_sd_mount()
     if sd_mount:
-        print(f"[+] SD card mounted at {sd_mount}")
-        # Start camera stream immediately so fresh frames are always available
-        start_cam_stream(sd_mount)
-        write_cam_status(sd_mount, "Camera Active")
-
-        # Initialize command sequences to ignore stale files
-        for cf in [sd_mount / "Stream" / "cam_cmd.txt", sd_mount / "MERO" / "cam_cmd.txt"]:
-            if cf.exists():
-                try:
-                    for l in cf.read_text().splitlines():
-                        if l.startswith("seq="):
-                            last_cam_seq = max(last_cam_seq, int(l.split("=")[1]))
-                except Exception:
-                    pass
+        print(f"[+] SD card mounted at: {sd_mount}")
+        fetch_weather(sd_mount)
 
     poll_count = 0
     while True:
         try:
             # 1. Mount maintenance
-            if poll_count % 15 == 0 or not sd_mount:
+            if poll_count % 30 == 0 or not sd_mount:
                 new_mount = find_sd_mount()
                 if new_mount != sd_mount:
                     sd_mount = new_mount
-                    if sd_mount and not is_cam_streaming:
-                        start_cam_stream(sd_mount)
+                    if sd_mount:
+                        print(f"[+] SD card detected at: {sd_mount}")
+                        fetch_weather(sd_mount)
 
-            # 2. Camera command management
-            if sd_mount:
-                check_cam_commands(sd_mount)
+            # 2. Weather telemetry update
+            if poll_count % 50 == 0:
+                fetch_weather(sd_mount)
 
-            # Ensure camera stream stays running if SD card is mounted
-            if sd_mount and not is_cam_streaming:
-                start_cam_stream(sd_mount)
-
-            # 3. Media Player management
-            if poll_count % 5 == 0 or not active_player:
+            # 3. Media player tracking
+            if poll_count % 10 == 0 or not active_player:
                 found_player = find_target_player()
                 if found_player != active_player:
                     active_player = found_player
-                    print(f"[+] Locked onto media player: {active_player}")
-
-            if sd_mount:
-                check_media_storage_commands(sd_mount, active_player)
+                    if active_player:
+                        print(f"[+] Locked onto player: {active_player}")
 
             media = get_media_status(active_player)
             if media and sd_mount:
@@ -629,18 +445,14 @@ def main():
                 write_now_playing(sd_mount, media)
 
             poll_count += 1
-            time.sleep(0.12)
+            time.sleep(0.5)
+
         except KeyboardInterrupt:
+            print("\n[+] Daemon stopped cleanly.")
             break
         except Exception as e:
-            time.sleep(0.2)
+            time.sleep(1.0)
 
-    stop_cam_stream()
-    if cam_preview_proc:
-        try:
-            cam_preview_proc.terminate()
-        except Exception:
-            pass
 
 if __name__ == "__main__":
     main()
