@@ -3,9 +3,10 @@
 mero_bridge.py - Unified Host Bridge for Mero Companion Deck
 Project: mero-monitor-#2
 Features:
-  1. YouTube Music / MPRIS: Real-time metadata, title, artist, album, progress, duration, cover art
-  2. Cyberpunk Meteorological Telemetry: Live weather, humidity, wind, pressure, UV, 3-day forecast (wttr.in)
-  3. Dual-Transport: Direct in-place SDMMC FAT32 storage sync + optional ActiveSync serial stream (/dev/ttyUSB0)
+  1. YouTube Music / MPRIS: Strictly binds to music.youtube.com, real-time metadata,
+     accurate position, duration, and HD album art extraction (never hijacked by normal YouTube tabs).
+  2. Cyberpunk Meteorological Telemetry: Live weather, humidity, wind, pressure, UV, 3-day forecast (wttr.in).
+  3. Dual-Transport: Direct in-place SDMMC FAT32 storage sync + optional ActiveSync serial stream (/dev/ttyUSB0).
 """
 
 import os
@@ -13,7 +14,6 @@ import sys
 import time
 import json
 import shutil
-import datetime
 import urllib.request
 import subprocess
 from pathlib import Path
@@ -70,6 +70,22 @@ def find_sd_mount():
     return None
 
 
+LOCAL_MEDIA_EXE = Path("/home/zacmero/projects/mero-monitor-#2/wince/media/mero-media-ctrl.exe")
+
+def sync_binaries(sd_mount):
+    if not sd_mount or not LOCAL_MEDIA_EXE.exists():
+        return
+    dest = sd_mount / "MERO" / "mero-media-ctrl.exe"
+    try:
+        if not dest.exists() or LOCAL_MEDIA_EXE.stat().st_mtime > dest.stat().st_mtime:
+            shutil.copy2(LOCAL_MEDIA_EXE, dest)
+            os.sync()
+            print(f"[+] Auto-deployed updated mero-media-ctrl.exe to {dest}")
+    except Exception as e:
+        print(f"[!] Auto-deploy error: {e}")
+
+
+
 # ====================================================================
 # SERIAL PORT STREAMING (ActiveSync mode)
 # ====================================================================
@@ -102,7 +118,7 @@ def init_serial():
         serial_fd = fd
         print(f"[+] Connected to ActiveSync serial port: {SERIAL_PORT}")
         return serial_fd
-    except Exception as e:
+    except Exception:
         serial_fd = None
         return None
 
@@ -202,7 +218,7 @@ def fetch_weather(sd_mount=None):
 
 
 # ====================================================================
-# MEDIA CONTROLLER (YouTube Music / MPRIS)
+# STRICT YOUTUBE MUSIC TARGETING (Never hijacked by video tabs)
 # ====================================================================
 def find_target_player():
     raw = run_cmd("playerctl -l 2>/dev/null")
@@ -212,22 +228,30 @@ def find_target_player():
     if not players:
         return None
 
+    # Priority 1: Explicit music.youtube.com URL (Playing or Paused)
     for p in players:
         url = run_cmd(f'playerctl -p "{p}" metadata xesam:url 2>/dev/null')
         if "music.youtube.com" in url:
             return p
 
+    # Priority 2: Player metadata containing 'music.youtube' or 'YouTube Music'
     for p in players:
-        meta = run_cmd(f'playerctl -p "{p}" metadata --format "{{{{xesam:title}}}} {{{{xesam:album}}}} {{{{xesam:url}}}}" 2>/dev/null')
-        if "music.youtube" in meta.lower():
+        meta = run_cmd(f'playerctl -p "{p}" metadata --format "{{{{xesam:title}}}} {{{{xesam:album}}}} {{{{xesam:artist}}}} {{{{xesam:url}}}}" 2>/dev/null')
+        meta_low = meta.lower()
+        if "music.youtube" in meta_low or "youtube music" in meta_low:
             return p
 
+    # Priority 3: Native desktop music players (Spotify, MPD, etc.), EXCLUDING youtube.com video tabs
     for p in players:
+        url = run_cmd(f'playerctl -p "{p}" metadata xesam:url 2>/dev/null')
+        # STRICT FILTER: Never match standard youtube.com/watch video tabs!
+        if "youtube.com" in url and "music.youtube.com" not in url:
+            continue
         status = run_cmd(f'playerctl -p "{p}" status 2>/dev/null')
         if status.lower() == "playing":
             return p
 
-    return players[0]
+    return None
 
 
 def get_media_status(player):
@@ -244,7 +268,7 @@ def get_media_status(player):
         return None
 
     parts = out.split(";;;")
-    title = parts[0].strip() if len(parts) > 0 and parts[0].strip() else "Unknown Title"
+    title = parts[0].strip() if len(parts) > 0 and parts[0].strip() else "Unknown Track"
     artist = parts[1].strip() if len(parts) > 1 and parts[1].strip() else "YouTube Music"
     album = parts[2].strip() if len(parts) > 2 and parts[2].strip() else "YouTube Music"
     art_url = parts[3].strip() if len(parts) > 3 else ""
@@ -289,7 +313,7 @@ def extract_video_id(track_url):
     return ""
 
 
-def update_artwork(art_url, sd_mount, track_url=""):
+def update_artwork(art_url, sd_mount, track_url="", title=""):
     global last_art_url
     if not sd_mount:
         return
@@ -297,12 +321,17 @@ def update_artwork(art_url, sd_mount, track_url=""):
     video_id = extract_video_id(track_url)
     if video_id:
         cache_key = video_id
-        cdn_url = f"https://i.ytimg.com/vi/{video_id}/maxresdefault.jpg"
-        fallback_url = f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
-    else:
+        cdn_urls = [
+            f"https://i.ytimg.com/vi/{video_id}/maxresdefault.jpg",
+            f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
+            f"https://i.ytimg.com/vi/{video_id}/mqdefault.jpg"
+        ]
+    elif art_url:
         cache_key = art_url
-        cdn_url = art_url
-        fallback_url = ""
+        cdn_urls = [art_url]
+    else:
+        cache_key = title
+        cdn_urls = []
 
     if not cache_key or cache_key == last_art_url:
         return
@@ -311,48 +340,37 @@ def update_artwork(art_url, sd_mount, track_url=""):
     dest_mero.parent.mkdir(parents=True, exist_ok=True)
 
     fetched = False
-    if cdn_url.startswith("http"):
-        try:
-            req = urllib.request.Request(cdn_url, headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                data = resp.read()
-                if len(data) > 2000:
-                    with open(dest_mero, "wb") as f:
-                        f.write(data)
-                        f.flush()
-                    os.sync()
-                    last_art_url = cache_key
-                    print(f"[+] Downloaded YouTube HD cover art: {len(data)} bytes")
-                    fetched = True
-        except Exception:
-            pass
-
-        if not fetched and fallback_url:
-            try:
-                req = urllib.request.Request(fallback_url, headers={"User-Agent": "Mozilla/5.0"})
-                with urllib.request.urlopen(req, timeout=5) as resp:
-                    data = resp.read()
-                    if len(data) > 1000:
-                        with open(dest_mero, "wb") as f:
-                            f.write(data)
-                            f.flush()
-                        os.sync()
-                        last_art_url = cache_key
-                        print(f"[+] Downloaded YouTube HQ cover art: {len(data)} bytes")
-                        fetched = True
-            except Exception:
-                pass
-
-    elif cdn_url.startswith("file://"):
-        local_path = Path(cdn_url.replace("file://", ""))
+    # Check if local artUrl file exists (e.g. Firefox MPRIS file://)
+    if art_url.startswith("file://"):
+        local_path = Path(art_url.replace("file://", ""))
         if local_path.exists():
             try:
                 shutil.copyfile(local_path, dest_mero)
                 os.sync()
                 last_art_url = cache_key
-                print(f"[+] Copied local cover art: {local_path.name}")
+                print(f"[+] Updated cover art from local MPRIS cache: {local_path.name}")
+                fetched = True
             except Exception:
                 pass
+
+    if not fetched:
+        for u in cdn_urls:
+            if u.startswith("http"):
+                try:
+                    req = urllib.request.Request(u, headers={"User-Agent": "Mozilla/5.0"})
+                    with urllib.request.urlopen(req, timeout=5) as resp:
+                        data = resp.read()
+                        if len(data) > 1000:
+                            with open(dest_mero, "wb") as f:
+                                f.write(data)
+                                f.flush()
+                            os.sync()
+                            last_art_url = cache_key
+                            print(f"[+] Downloaded YouTube cover art: {len(data)} bytes ({u})")
+                            fetched = True
+                            break
+                except Exception:
+                    continue
 
 
 def write_now_playing(sd_mount, media):
@@ -369,7 +387,6 @@ def write_now_playing(sd_mount, media):
     ).encode("utf-8")
 
     now = time.time()
-    # Write to SD card in-place if changed or periodically
     if content != _last_now_playing_content:
         dest_mero = sd_mount / "MERO" / "now_playing.txt"
         try:
@@ -382,7 +399,7 @@ def write_now_playing(sd_mount, media):
         except Exception as e:
             print(f"[!] Storage write error: {e}")
 
-    # Serial streaming (max 2 times per second)
+    # Serial streaming (up to 2 times/sec)
     if (now - last_serial_send_time) >= 0.5:
         line = (
             f"MERO:NOW:status={media['status']}|title={media['title']}|"
@@ -394,44 +411,48 @@ def write_now_playing(sd_mount, media):
 
 
 # ====================================================================
-# MAIN BRIDGE LOOP
+# MAIN CONTINUOUS PROBING LOOP
 # ====================================================================
 def main():
     global active_player, last_title, last_status, last_art_url
     sys.stdout.reconfigure(line_buffering=True)
-    print("=== MERO COMPANION DECK: UNIFIED HOST DAEMON ===")
-    print("  [+] YouTube Music MPRIS View")
-    print("  [+] Cyberpunk Meteorological Telemetry (Canela, RS)")
+    print("=== MERO COMPANION DECK: CONTINUOUS PROBING DAEMON ===")
+    print("  [+] Strict YouTube Music Tracking (music.youtube.com)")
+    print("  [+] Cyberpunk Weather Matrix (Canela, RS)")
 
     sd_mount = find_sd_mount()
     if sd_mount:
-        print(f"[+] SD card mounted at: {sd_mount}")
+        print(f"[+] SD card detected at: {sd_mount}")
+        sync_binaries(sd_mount)
         fetch_weather(sd_mount)
 
     poll_count = 0
     while True:
         try:
             # 1. Mount maintenance
-            if poll_count % 30 == 0 or not sd_mount:
+            if poll_count % 20 == 0 or not sd_mount:
                 new_mount = find_sd_mount()
                 if new_mount != sd_mount:
                     sd_mount = new_mount
                     if sd_mount:
-                        print(f"[+] SD card detected at: {sd_mount}")
+                        print(f"[+] SD card mounted at: {sd_mount}")
+                        sync_binaries(sd_mount)
                         fetch_weather(sd_mount)
 
-            # 2. Weather telemetry update
-            if poll_count % 50 == 0:
+            # 2. Weather telemetry (every 10 minutes)
+            if poll_count % 1200 == 0:
                 fetch_weather(sd_mount)
 
-            # 3. Media player tracking
-            if poll_count % 10 == 0 or not active_player:
-                found_player = find_target_player()
-                if found_player != active_player:
-                    active_player = found_player
-                    if active_player:
-                        print(f"[+] Locked onto player: {active_player}")
+            # 3. Continuous player probing (every 500ms)
+            found_player = find_target_player()
+            if found_player != active_player:
+                active_player = found_player
+                if active_player:
+                    print(f"[+] Locked onto YouTube Music player: {active_player}")
+                else:
+                    print("[-] Waiting for YouTube Music (music.youtube.com)...")
 
+            # 4. Media status and in-place sync
             media = get_media_status(active_player)
             if media and sd_mount:
                 if media["title"] != last_title or media["status"] != last_status:
@@ -439,9 +460,9 @@ def main():
                         last_art_url = ""
                     last_title = media["title"]
                     last_status = media["status"]
-                    print(f"[*] Track: {media['artist']} - {media['title']} [{media['status']}] ({media['position']}s / {media['length']}s)")
+                    print(f"[*] YouTube Music: {media['artist']} - {media['title']} [{media['status']}] ({media['position']}s / {media['length']}s)")
 
-                update_artwork(media["art_url"], sd_mount, media.get("track_url", ""))
+                update_artwork(media["art_url"], sd_mount, media.get("track_url", ""), media["title"])
                 write_now_playing(sd_mount, media)
 
             poll_count += 1
