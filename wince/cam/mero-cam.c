@@ -52,7 +52,6 @@ static BOOL       g_hasFrame    = FALSE;
 static BOOL       g_showOsd     = TRUE;
 static int        g_cmdSeq      = 0;
 static DWORD      g_lastHeartbeat = 0;
-static DWORD      g_lastFileHash = 0;
 
 /* Status from Host */
 static BOOL       g_isRecording = FALSE;
@@ -264,17 +263,22 @@ static void DrawHUD(HDC backDC)
             colBdr = RGB(160, 40, 40);
         }
 
+        /* Fill button body with dark slate */
         HBRUSH hBtnBr = CreateSolidBrush(colBg);
         FillRect(backDC, &g_buttons[i].rc, hBtnBr);
         DeleteObject(hBtnBr);
 
-        HPEN hBtnPen = CreatePen(PS_SOLID, 1, colBdr);
-        HPEN hOldP = (HPEN)SelectObject(backDC, hBtnPen);
+        /* Stroke 1-pixel border outline using NULL_BRUSH (leaves background intact) */
+        HPEN hPen = CreatePen(PS_SOLID, 1, colBdr);
+        HPEN hOldP = (HPEN)SelectObject(backDC, hPen);
+        HBRUSH hOldB = (HBRUSH)SelectObject(backDC, GetStockObject(NULL_BRUSH));
         Rectangle(backDC, g_buttons[i].rc.left, g_buttons[i].rc.top,
                   g_buttons[i].rc.right, g_buttons[i].rc.bottom);
+        SelectObject(backDC, hOldB);
         SelectObject(backDC, hOldP);
-        DeleteObject(hBtnPen);
+        DeleteObject(hPen);
 
+        SetBkMode(backDC, TRANSPARENT);
         SetTextColor(backDC, colTxt);
         DrawTextW(backDC, g_buttons[i].label, -1, &g_buttons[i].rc,
                   DT_CENTER | DT_VCENTER | DT_SINGLELINE);
@@ -334,14 +338,6 @@ static void PollCamFrame(void)
         free(buf);
         return;
     }
-
-    /* Fast hash check to skip decode if frame has not changed */
-    DWORD hash = (bytesRead ^ ((DWORD)buf[10] << 16) ^ ((DWORD)buf[bytesRead / 2] << 8) ^ buf[bytesRead - 5]);
-    if (hash == g_lastFileHash && g_hasFrame) {
-        free(buf);
-        return;
-    }
-    g_lastFileHash = hash;
 
     /* Decode as 4 channels (RGBA 32bpp) */
     int w = 0, h = 0, ch = 0;

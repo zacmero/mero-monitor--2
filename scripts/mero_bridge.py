@@ -570,11 +570,13 @@ def main():
     global last_cam_seq, last_media_seq, last_cam_heartbeat
     sys.stdout.reconfigure(line_buffering=True)
     print("=== MERO MONITOR #2: UNIFIED HOST BRIDGE ===")
-    print("[*] Managing YouTube Music + DarkHorse Webcam on-demand")
-
     sd_mount = find_sd_mount()
     if sd_mount:
         print(f"[+] SD card mounted at {sd_mount}")
+        # Start camera stream immediately so fresh frames are always available
+        start_cam_stream(sd_mount)
+        write_cam_status(sd_mount, "Camera Active")
+
         # Initialize command sequences to ignore stale files
         for cf in [sd_mount / "Stream" / "cam_cmd.txt", sd_mount / "MERO" / "cam_cmd.txt"]:
             if cf.exists():
@@ -590,18 +592,19 @@ def main():
         try:
             # 1. Mount maintenance
             if poll_count % 15 == 0 or not sd_mount:
-                sd_mount = find_sd_mount()
+                new_mount = find_sd_mount()
+                if new_mount != sd_mount:
+                    sd_mount = new_mount
+                    if sd_mount and not is_cam_streaming:
+                        start_cam_stream(sd_mount)
 
-            # 2. Camera on-demand management
+            # 2. Camera command management
             if sd_mount:
                 check_cam_commands(sd_mount)
 
-            # Auto-idle camera if app closed (no heartbeat for > 35s)
-            if is_cam_streaming and (time.time() - last_cam_heartbeat > 35):
-                print("[*] Cam client idle for 35s, releasing camera hardware.")
-                stop_cam_stream()
-                if sd_mount:
-                    write_cam_status(sd_mount, "Standby")
+            # Ensure camera stream stays running if SD card is mounted
+            if sd_mount and not is_cam_streaming:
+                start_cam_stream(sd_mount)
 
             # 3. Media Player management
             if poll_count % 5 == 0 or not active_player:
