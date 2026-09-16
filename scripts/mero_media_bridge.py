@@ -254,13 +254,18 @@ def update_artwork(art_url, sd_mount, track_url=""):
             if tmp_out.exists():
                 stream_dir = sd_mount / "Stream"
                 mero_dir = sd_mount / "MERO"
-                stream_dir.mkdir(parents=True, exist_ok=True)
                 mero_dir.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(tmp_out, stream_dir / "cover.jpg")
                 shutil.copyfile(tmp_out, mero_dir / "cover.jpg")
+                # Never write cover to Stream folder — purge if present to protect slideshow
+                stream_cover = stream_dir / "cover.jpg"
+                if stream_cover.exists():
+                    try:
+                        stream_cover.unlink()
+                    except Exception:
+                        pass
                 last_art_url = cache_key
                 src = "YT CDN" if video_id else "MPRIS"
-                print(f"[+] Cover art updated ({src}, vid={video_id or 'n/a'}) → 180x180 JPEG")
+                print(f"[+] Cover art updated ({src}, vid={video_id or 'n/a'}) → 180x180 JPEG (saved to MERO/)")
     except Exception as e:
         print(f"[!] Artwork fetch error: {e}")
 
@@ -420,7 +425,7 @@ def write_now_playing(sd_mount, media):
         f"status={media['status']}\r\n"
         f"position={media['position']}\r\n"
         f"length={media['length']}\r\n"
-        f"cover=\\SDMMC\\Stream\\cover.jpg\r\n"
+        f"cover=\\SDMMC\\MERO\\cover.jpg\r\n"
     ).encode("utf-8")
 
     if content == _last_now_playing_content:

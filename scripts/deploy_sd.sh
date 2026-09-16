@@ -33,10 +33,16 @@ cp -v wince/gallery/mero-gallery.exe "$SD_MOUNT/MERO/mero-gallery.exe"
 [ -f wince/cmd/mero-cmd.exe ] && cp -v wince/cmd/mero-cmd.exe "$SD_MOUNT/MERO/mero-cmd.exe"
 [ -f wince/probe/mero-probe.exe ] && cp -v wince/probe/mero-probe.exe "$SD_MOUNT/MERO/mero-probe.exe"
 [ -f wince/flash/mero-flash.exe ] && cp -v wince/flash/mero-flash.exe "$SD_MOUNT/MERO/mero-flash.exe"
+[ -f wince/cam/mero-cam.exe ] && cp -v wince/cam/mero-cam.exe "$SD_MOUNT/MERO/mero-cam.exe"
 
 for ico in wince/shell/*.ico; do
     [ -f "$ico" ] && cp -v "$ico" "$SD_MOUNT/MERO/"
 done
+
+# Ensure gallery.cfg default fill @ 270 is present
+if [ ! -f "$SD_MOUNT/MERO/gallery.cfg" ]; then
+    printf "fit=1\r\norient=3\r\ninterval=5\r\n" > "$SD_MOUNT/MERO/gallery.cfg"
+fi
 
 echo "[+] Flushing filesystem cache..."
 sync

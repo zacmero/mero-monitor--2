@@ -81,8 +81,8 @@ static const int    g_intervalOptions[] = { 1, 2, 3, 5, 10, 30 };
 static const int    g_intervalOptionCount = 6;
 static int          g_intervalOptIdx = 2; /* Default 3s */
 
-static FitMode      g_fitMode = FIT_CONTAIN;
-static OrientMode   g_orientMode = ORIENT_0;
+static FitMode      g_fitMode = FIT_COVER;
+static OrientMode   g_orientMode = ORIENT_270;
 static BOOL         g_osdVisible = TRUE;
 static BOOL         g_folderDialogOpen = FALSE;
 
@@ -165,6 +165,61 @@ static void LoadDisplayConfig(void)
     BuildColorLut();
 }
 
+static void SaveGalleryConfig(void)
+{
+    HANDLE hFile;
+    DWORD written;
+    char buf[128];
+
+    sprintf(buf, "fit=%d\r\norient=%d\r\ninterval=%d\r\n",
+            (int)g_fitMode, (int)g_orientMode, g_intervalSec);
+
+    CreateDirectoryW(L"\\SDMMC\\MERO", NULL);
+    hFile = CreateFileW(L"\\SDMMC\\MERO\\gallery.cfg", GENERIC_WRITE, FILE_SHARE_READ, NULL,
+                        CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile != INVALID_HANDLE_VALUE) {
+        WriteFile(hFile, buf, (DWORD)strlen(buf), &written, NULL);
+        FlushFileBuffers(hFile);
+        CloseHandle(hFile);
+    }
+}
+
+static void LoadGalleryConfig(void)
+{
+    HANDLE hFile;
+    DWORD bytesRead;
+    char buf[256];
+
+    /* Default requested: Fill screen at 270° orientation */
+    g_fitMode = FIT_COVER;
+    g_orientMode = ORIENT_270;
+
+    hFile = CreateFileW(L"\\SDMMC\\MERO\\gallery.cfg", GENERIC_READ, FILE_SHARE_READ, NULL,
+                        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile == INVALID_HANDLE_VALUE) {
+        hFile = CreateFileW(L"\\ResidentFlash\\MERO\\gallery.cfg", GENERIC_READ, FILE_SHARE_READ, NULL,
+                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    }
+    if (hFile != INVALID_HANDLE_VALUE) {
+        memset(buf, 0, sizeof(buf));
+        if (ReadFile(hFile, buf, sizeof(buf) - 1, &bytesRead, NULL) && bytesRead > 0) {
+            char *line = strtok(buf, "\r\n");
+            while (line) {
+                int val = 0;
+                if (sscanf(line, "fit=%d", &val) == 1) {
+                    if (val == FIT_CONTAIN || val == FIT_COVER) g_fitMode = (FitMode)val;
+                } else if (sscanf(line, "orient=%d", &val) == 1) {
+                    if (val >= 0 && val < 4) g_orientMode = (OrientMode)val;
+                } else if (sscanf(line, "interval=%d", &val) == 1) {
+                    if (val >= 1 && val <= 60) g_intervalSec = val;
+                }
+                line = strtok(NULL, "\r\n");
+            }
+        }
+        CloseHandle(hFile);
+    }
+}
+
 /* Forward declarations */
 static void ScanActiveFolder(void);
 static void LoadCurrentImage(void);
@@ -173,6 +228,12 @@ static void ResetOsdTimer(void);
 
 static BOOL HasImageExtension(const WCHAR *name)
 {
+    /* Ignore system stream/media assets: album cover art and webcam frame */
+    if (_wcsnicmp(name, L"cover.", 6) == 0 ||
+        _wcsnicmp(name, L"cam.", 4) == 0) {
+        return FALSE;
+    }
+
     const WCHAR *ext = wcsrchr(name, L'.');
     if (!ext) return FALSE;
     if (_wcsicmp(ext, L".bmp") == 0 ||
@@ -544,6 +605,7 @@ static void CycleInterval(void)
 static void CycleFitMode(void)
 {
     g_fitMode = (g_fitMode == FIT_CONTAIN) ? FIT_COVER : FIT_CONTAIN;
+    SaveGalleryConfig();
     LoadCurrentImage();
     ResetOsdTimer();
 }
@@ -551,6 +613,7 @@ static void CycleFitMode(void)
 static void CycleOrientMode(void)
 {
     g_orientMode = (OrientMode)((g_orientMode + 1) % 4);
+    SaveGalleryConfig();
     LoadCurrentImage();
     ResetOsdTimer();
 }
@@ -567,11 +630,11 @@ static void ExitGallery(void)
     KillTimer(g_hWnd, TIMER_ID_SLIDESHOW);
     KillTimer(g_hWnd, TIMER_ID_OSD_HIDE);
 
-    /* Relaunch Mero Shell before closing */
+    /* Relaunch Mero Shell before closing (try SDMMC first, then ResidentFlash) */
     PROCESS_INFORMATION pi;
     memset(&pi, 0, sizeof(pi));
-    if (!CreateProcessW(L"\\ResidentFlash\\MERO\\mero-shell.exe", NULL, NULL, NULL, FALSE, 0, NULL, NULL, NULL, &pi)) {
-        CreateProcessW(L"\\SDMMC\\MERO\\mero-shell.exe", NULL, NULL, NULL, FALSE, 0, NULL, NULL, NULL, &pi);
+    if (!CreateProcessW(L"\\SDMMC\\MERO\\mero-shell.exe", NULL, NULL, NULL, FALSE, 0, NULL, NULL, NULL, &pi)) {
+        CreateProcessW(L"\\ResidentFlash\\MERO\\mero-shell.exe", NULL, NULL, NULL, FALSE, 0, NULL, NULL, NULL, &pi);
     }
     if (pi.hProcess) {
         CloseHandle(pi.hProcess);
@@ -896,6 +959,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         }
 
         LoadDisplayConfig();
+        LoadGalleryConfig();
         DiscoverFolders();
         ScanActiveFolder();
 

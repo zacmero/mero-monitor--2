@@ -31,8 +31,8 @@
 #define NOW_PLAYING_FLASH   L"\\ResidentFlash\\Stream\\now_playing.txt"
 #define NOW_PLAYING_MERO    L"\\SDMMC\\MERO\\now_playing.txt"
 
-#define COVER_FILE_SDMMC    L"\\SDMMC\\Stream\\cover.jpg"
-#define COVER_FILE_FLASH    L"\\ResidentFlash\\Stream\\cover.jpg"
+#define COVER_FILE_SDMMC    L"\\SDMMC\\MERO\\cover.jpg"
+#define COVER_FILE_FLASH    L"\\ResidentFlash\\MERO\\cover.jpg"
 
 #define CMD_FILE_SDMMC      L"\\SDMMC\\MERO\\media_cmd.txt"
 #define CMD_FILE_FLASH      L"\\ResidentFlash\\MERO\\media_cmd.txt"
