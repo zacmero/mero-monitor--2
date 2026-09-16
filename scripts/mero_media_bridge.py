@@ -147,7 +147,7 @@ def get_media_status(player):
     if not status:
         return None
 
-    fmt = "{{xesam:title}};;;{{xesam:artist}};;;{{xesam:album}};;;{{mpris:artUrl}};;;{{mpris:length}};;;{{position}};;;{{xesam:url}}"
+    fmt = "{{xesam:title}};;;{{xesam:artist}};;;{{xesam:album}};;;{{mpris:artUrl}};;;{{mpris:length}};;;{{xesam:url}}"
     out = run_cmd(f'playerctl -p "{player}" metadata --format "{fmt}" 2>/dev/null')
     if not out or ";;;" not in out:
         return None
@@ -157,7 +157,7 @@ def get_media_status(player):
     artist = parts[1].strip() if len(parts) > 1 and parts[1].strip() else "YouTube Music"
     album = parts[2].strip() if len(parts) > 2 and parts[2].strip() else "YouTube Music"
     art_url = parts[3].strip() if len(parts) > 3 else ""
-    track_url = parts[6].strip() if len(parts) > 6 else ""
+    track_url = parts[5].strip() if len(parts) > 5 else ""
 
     length_sec = 0
     if len(parts) > 4 and parts[4].strip():
@@ -166,19 +166,15 @@ def get_media_status(player):
         except ValueError:
             pass
 
+    # Always query position via direct D-Bus call — Firefox MPRIS returns stale/0
+    # for the metadata position property but answers the standalone query correctly.
     pos_sec = 0
-    if len(parts) > 5 and parts[5].strip():
+    pos_raw = run_cmd(f'playerctl -p "{player}" position 2>/dev/null')
+    if pos_raw:
         try:
-            pos_sec = int(float(parts[5].strip())) // 1000000
+            pos_sec = int(float(pos_raw))
         except ValueError:
             pass
-    if pos_sec == 0:
-        pos_raw = run_cmd(f'playerctl -p "{player}" position 2>/dev/null')
-        if pos_raw:
-            try:
-                pos_sec = int(float(pos_raw))
-            except ValueError:
-                pass
 
     return {
         "status": status.upper(),
@@ -439,7 +435,7 @@ def write_now_playing(sd_mount, media):
                 pass
 
 def main():
-    global active_player, last_title, last_status
+    global active_player, last_title, last_status, last_art_url
     sys.stdout.reconfigure(line_buffering=True)
     print("=== MERO MONITOR #2: DUAL-STACK MEDIA BRIDGE ===")
     print("[*] Initializing USB Serial (/dev/ttyUSB0) & Storage Mailbox...")
@@ -467,6 +463,8 @@ def main():
             if media:
                 if media["title"] != last_title or media["status"] != last_status:
                     print(f"[*] Track: {media['artist']} - {media['title']} [{media['status']}] ({media['position']}s / {media['length']}s)")
+                    if media["title"] != last_title:
+                        last_art_url = ""   # force cover re-fetch on every track change
                     last_title = media["title"]
                     last_status = media["status"]
 

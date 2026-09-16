@@ -65,6 +65,7 @@ static HDC            g_coverDC = NULL;
 static HBITMAP        g_hOldCoverBmp = NULL;
 static BOOL           g_hasCover = FALSE;
 static WCHAR          g_lastCoverPath[MAX_PATH] = L"";
+static WCHAR          g_lastTrackTitle[128] = L"";
 
 /* Calibrated Color Correction LUT */
 static unsigned char  g_lut[256];
@@ -194,51 +195,330 @@ static void LoadCoverArt(const WCHAR *path)
     lstrcpynW(g_lastCoverPath, path, MAX_PATH);
 }
 
+static int    g_cmdSeq = 0;
+static HANDLE g_hSerial = INVALID_HANDLE_VALUE;
+static WCHAR  g_activeSerialPort[32] = L"";
+static DWORD  g_lastSerialRxTime = 0;
+static int    g_candidateIdx = 0;
+static DWORD  g_rxPacketCount = 0;
+static DWORD  g_lastLocalTick = 0;
+
+static WCHAR  g_candidatePorts[12][32];
+static int    g_candidateCount = 0;
+
+static void InitCandidatePorts(void)
+{
+    g_candidateCount = 0;
+
+    /* 1. Discover active serial stream drivers directly from HKLM\Drivers\Active */
+    HKEY hKey;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"Drivers\\Active", 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+        DWORD index = 0;
+        WCHAR subKey[64];
+        DWORD subLen;
+
+        while (1) {
+            subLen = sizeof(subKey) / sizeof(subKey[0]);
+            if (RegEnumKeyExW(hKey, index++, subKey, &subLen, NULL, NULL, NULL, NULL) != ERROR_SUCCESS) {
+                break;
+            }
+
+            HKEY hSub;
+            if (RegOpenKeyExW(hKey, subKey, 0, KEY_READ, &hSub) == ERROR_SUCCESS) {
+                WCHAR keyVal[128] = { 0 };
+                WCHAR nameVal[64] = { 0 };
+                DWORD kLen = sizeof(keyVal);
+                DWORD nLen = sizeof(nameVal);
+
+                RegQueryValueExW(hSub, L"Key", NULL, NULL, (BYTE*)keyVal, &kLen);
+                RegQueryValueExW(hSub, L"Name", NULL, NULL, (BYTE*)nameVal, &nLen);
+                RegCloseKey(hSub);
+
+                /* Filter out GPS (COM1), UART (COM2), TMC (COM3) to avoid hardware bus lockup */
+                if (wcsicmp(nameVal, L"COM1:") == 0 || wcsicmp(nameVal, L"COM2:") == 0 || wcsicmp(nameVal, L"COM3:") == 0) {
+                    continue;
+                }
+
+                if (nameVal[0] != L'\0' && (wcsstr(nameVal, L"COM") || wcsstr(nameVal, L"USB") || wcsstr(nameVal, L"VCP"))) {
+                    if (g_candidateCount < 12) {
+                        lstrcpynW(g_candidatePorts[g_candidateCount++], nameVal, 32);
+                    }
+                }
+            }
+        }
+        RegCloseKey(hKey);
+    }
+
+    /* 2. Add standard known virtual USB COM candidates if not already present */
+    static const WCHAR *defaults[] = {
+        L"COM4:", L"COM5:", L"COM7:", L"COM8:", L"COM9:", L"COM6:", L"COM0:",
+        L"USBSER1:", L"USBFN1:", L"$device\\COM4", L"$device\\COM5", L"$device\\COM7"
+    };
+    int i, j;
+    for (i = 0; i < 12 && g_candidateCount < 12; i++) {
+        BOOL exists = FALSE;
+        for (j = 0; j < g_candidateCount; j++) {
+            if (wcsicmp(g_candidatePorts[j], defaults[i]) == 0) {
+                exists = TRUE;
+                break;
+            }
+        }
+        if (!exists) {
+            lstrcpynW(g_candidatePorts[g_candidateCount++], defaults[i], 32);
+        }
+    }
+}
+
+static BOOL OpenSerialPort(const WCHAR *portName)
+{
+    if (g_hSerial != INVALID_HANDLE_VALUE) {
+        CloseHandle(g_hSerial);
+        g_hSerial = INVALID_HANDLE_VALUE;
+    }
+
+    g_hSerial = CreateFileW(
+        portName,
+        GENERIC_READ | GENERIC_WRITE,
+        0,
+        NULL,
+        OPEN_EXISTING,
+        0,
+        NULL
+    );
+
+    if (g_hSerial == INVALID_HANDLE_VALUE) return FALSE;
+
+    DCB dcb;
+    memset(&dcb, 0, sizeof(dcb));
+    dcb.DCBlength = sizeof(dcb);
+    if (GetCommState(g_hSerial, &dcb)) {
+        dcb.BaudRate = CBR_115200;
+        dcb.ByteSize = 8;
+        dcb.Parity = NOPARITY;
+        dcb.StopBits = ONESTOPBIT;
+        dcb.fBinary = TRUE;
+        dcb.fParity = FALSE;
+        dcb.fOutxCtsFlow = FALSE;
+        dcb.fOutxDsrFlow = FALSE;
+        dcb.fDtrControl = DTR_CONTROL_DISABLE;
+        dcb.fDsrSensitivity = FALSE;
+        dcb.fTXContinueOnXoff = TRUE;
+        dcb.fOutX = FALSE;
+        dcb.fInX = FALSE;
+        dcb.fErrorChar = FALSE;
+        dcb.fNull = FALSE;
+        dcb.fRtsControl = RTS_CONTROL_DISABLE;
+        dcb.fAbortOnError = FALSE;
+        SetCommState(g_hSerial, &dcb);
+    }
+
+    /* True non-blocking timeouts: read returns immediately, write caps at 25ms */
+    COMMTIMEOUTS timeouts;
+    timeouts.ReadIntervalTimeout = MAXDWORD;
+    timeouts.ReadTotalTimeoutMultiplier = 0;
+    timeouts.ReadTotalTimeoutConstant = 0;
+    timeouts.WriteTotalTimeoutMultiplier = 0;
+    timeouts.WriteTotalTimeoutConstant = 25;
+    SetCommTimeouts(g_hSerial, &timeouts);
+
+    PurgeComm(g_hSerial, PURGE_TXCLEAR | PURGE_RXCLEAR);
+
+    lstrcpynW(g_activeSerialPort, portName, 32);
+    return TRUE;
+}
+
+static void EnsureSerialConnected(void)
+{
+    DWORD now = GetTickCount();
+
+    if (g_candidateCount <= 0) {
+        InitCandidatePorts();
+    }
+
+    if (g_hSerial != INVALID_HANDLE_VALUE) {
+        /* If port opened but received no valid packets in 4s, cycle to next candidate */
+        if (g_lastSerialRxTime > 0 && (now - g_lastSerialRxTime) > 4000) {
+            CloseHandle(g_hSerial);
+            g_hSerial = INVALID_HANDLE_VALUE;
+            if (g_candidateCount > 0) {
+                g_candidateIdx = (g_candidateIdx + 1) % g_candidateCount;
+            }
+            g_lastSerialRxTime = 0;
+        } else {
+            return;
+        }
+    }
+
+    if (g_candidateCount <= 0) return;
+
+    int tries;
+    for (tries = 0; tries < g_candidateCount; tries++) {
+        const WCHAR *port = g_candidatePorts[g_candidateIdx];
+        if (OpenSerialPort(port)) {
+            DWORD written = 0;
+            WriteFile(g_hSerial, "MERO:PING\n", 10, &written, NULL);
+            /* NO FlushFileBuffers */
+            g_lastSerialRxTime = now;
+            break;
+        }
+        g_candidateIdx = (g_candidateIdx + 1) % g_candidateCount;
+    }
+}
+
+static char g_rxLineBuf[512] = "";
+static int  g_rxLineLen = 0;
+
+static BOOL PollSerialNowPlaying(void)
+{
+    if (g_hSerial == INVALID_HANDLE_VALUE) {
+        EnsureSerialConnected();
+        if (g_hSerial == INVALID_HANDLE_VALUE) return FALSE;
+    }
+
+    char chunk[128];
+    DWORD bytesRead = 0;
+    BOOL gotPacket = FALSE;
+    int readLoop = 4;
+
+    while (readLoop-- > 0 && ReadFile(g_hSerial, chunk, sizeof(chunk) - 1, &bytesRead, NULL) && bytesRead > 0) {
+        DWORD k;
+        for (k = 0; k < bytesRead; k++) {
+            char c = chunk[k];
+            if (c == '\r') continue;
+            if (c == '\n') {
+                g_rxLineBuf[g_rxLineLen] = '\0';
+                if (strncmp(g_rxLineBuf, "MERO:NOW:", 9) == 0) {
+                    char *payload = g_rxLineBuf + 9;
+                    char *token = strtok(payload, "|");
+                    while (token) {
+                        if (strncmp(token, "status=", 7) == 0) {
+                            g_isPlaying = (_strnicmp(token + 7, "PLAY", 4) == 0);
+                        } else if (strncmp(token, "title=", 6) == 0) {
+                            MultiByteToWideChar(CP_UTF8, 0, token + 6, -1, g_title, 128);
+                        } else if (strncmp(token, "artist=", 7) == 0) {
+                            MultiByteToWideChar(CP_UTF8, 0, token + 7, -1, g_artist, 64);
+                        } else if (strncmp(token, "album=", 6) == 0) {
+                            MultiByteToWideChar(CP_UTF8, 0, token + 6, -1, g_album, 64);
+                        } else if (strncmp(token, "pos=", 4) == 0) {
+                            int rxPos = atoi(token + 4);
+                            /* Only accept the remote position if:
+                               - it is positive (not a stale 0 from Firefox MPRIS), OR
+                               - local clock has drifted more than 3s from it (resync) */
+                            if (rxPos > 0 || abs(rxPos - g_positionSec) > 3) {
+                                g_positionSec = rxPos;
+                                g_lastLocalTick = GetTickCount();
+                            }
+                        } else if (strncmp(token, "len=", 4) == 0) {
+                            g_durationSec = atoi(token + 4);
+                        }
+                        token = strtok(NULL, "|");
+                    }
+                    gotPacket = TRUE;
+                    g_rxPacketCount++;
+                }
+                g_rxLineLen = 0;
+            } else {
+                if (g_rxLineLen < (int)sizeof(g_rxLineBuf) - 2) {
+                    g_rxLineBuf[g_rxLineLen++] = c;
+                }
+            }
+        }
+    }
+
+    if (gotPacket) {
+        g_lastSerialRxTime = GetTickCount();
+        InvalidateRect(g_hWnd, NULL, FALSE);
+    }
+    return gotPacket;
+}
+
 /* Dispatch command to host bridge */
 static void SendMediaCommand(const char *cmdName)
 {
+    g_cmdSeq++;
+
+    /* 1. DISPATCH OVER SERIAL (ActiveSync / Vsync mode) */
+    EnsureSerialConnected();
+    if (g_hSerial != INVALID_HANDLE_VALUE) {
+        char sMsg[64];
+        DWORD sWritten = 0;
+        sprintf(sMsg, "MERO:CMD:%s:%d\n", cmdName, g_cmdSeq);
+        WriteFile(g_hSerial, sMsg, (DWORD)strlen(sMsg), &sWritten, NULL);
+        /* NO FlushFileBuffers! */
+    }
+
+    /* 2. DISPATCH OVER STORAGE MAILBOX (Mass Storage mode) */
     HANDLE hFile;
     DWORD written;
+    char payload[128];
+    sprintf(payload, "seq=%d\r\ncmd=%s\r\n", g_cmdSeq, cmdName);
 
     CreateDirectoryW(L"\\SDMMC\\MERO", NULL);
     CreateDirectoryW(L"\\ResidentFlash\\MERO", NULL);
+    CreateDirectoryW(L"\\SDMMC\\Stream", NULL);
+    CreateDirectoryW(L"\\ResidentFlash\\Stream", NULL);
 
-    hFile = CreateFileW(CMD_FILE_SDMMC, GENERIC_WRITE, FILE_SHARE_READ, NULL,
+    /* Dispatch to SDMMC MERO */
+    hFile = CreateFileW(CMD_FILE_SDMMC, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
                         CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile != INVALID_HANDLE_VALUE) {
-        WriteFile(hFile, cmdName, (DWORD)strlen(cmdName), &written, NULL);
+        WriteFile(hFile, payload, (DWORD)strlen(payload), &written, NULL);
         CloseHandle(hFile);
     }
 
-    hFile = CreateFileW(CMD_FILE_FLASH, GENERIC_WRITE, FILE_SHARE_READ, NULL,
+    /* Dispatch to SDMMC Stream */
+    hFile = CreateFileW(L"\\SDMMC\\Stream\\media_cmd.txt", GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
                         CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile != INVALID_HANDLE_VALUE) {
-        WriteFile(hFile, cmdName, (DWORD)strlen(cmdName), &written, NULL);
+        WriteFile(hFile, payload, (DWORD)strlen(payload), &written, NULL);
+        CloseHandle(hFile);
+    }
+
+    /* Dispatch to ResidentFlash MERO */
+    hFile = CreateFileW(CMD_FILE_FLASH, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                        CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile != INVALID_HANDLE_VALUE) {
+        WriteFile(hFile, payload, (DWORD)strlen(payload), &written, NULL);
+        CloseHandle(hFile);
+    }
+
+    /* Dispatch to ResidentFlash Stream */
+    hFile = CreateFileW(L"\\ResidentFlash\\Stream\\media_cmd.txt", GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                        CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile != INVALID_HANDLE_VALUE) {
+        WriteFile(hFile, payload, (DWORD)strlen(payload), &written, NULL);
         CloseHandle(hFile);
     }
 
     /* Tactile status feedback */
-    wsprintfW(g_statusMsg, L"DISPATCHED -> %hs", cmdName);
+    wsprintfW(g_statusMsg, L"CMD #%d: %hs [SENT]", g_cmdSeq, cmdName);
     InvalidateRect(g_hWnd, NULL, FALSE);
 }
 
-/* Poll now_playing.txt for track updates */
+/* Poll track updates via Serial or SDMMC/Flash */
 static void PollNowPlaying(void)
 {
+    /* Check serial first (ActiveSync mode) */
+    if (PollSerialNowPlaying()) {
+        return;
+    }
+
+    /* Fallback to storage polling (Mass Storage mode) */
     HANDLE hFile;
     DWORD bytesRead;
     char buf[1024];
     WCHAR coverPath[MAX_PATH] = L"";
+    BOOL gotData = FALSE;
 
-    hFile = CreateFileW(NOW_PLAYING_SDMMC, GENERIC_READ, FILE_SHARE_READ, NULL,
-                        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    hFile = CreateFileW(NOW_PLAYING_SDMMC, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, NULL);
     if (hFile == INVALID_HANDLE_VALUE) {
-        hFile = CreateFileW(NOW_PLAYING_FLASH, GENERIC_READ, FILE_SHARE_READ, NULL,
-                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        hFile = CreateFileW(NOW_PLAYING_FLASH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, NULL);
     }
     if (hFile == INVALID_HANDLE_VALUE) {
-        hFile = CreateFileW(NOW_PLAYING_MERO, GENERIC_READ, FILE_SHARE_READ, NULL,
-                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        hFile = CreateFileW(NOW_PLAYING_MERO, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, NULL);
     }
 
     if (hFile != INVALID_HANDLE_VALUE) {
@@ -248,6 +528,7 @@ static void PollNowPlaying(void)
             while (line) {
                 if (strncmp(line, "title=", 6) == 0) {
                     MultiByteToWideChar(CP_UTF8, 0, line + 6, -1, g_title, 128);
+                    gotData = TRUE;
                 } else if (strncmp(line, "artist=", 7) == 0) {
                     MultiByteToWideChar(CP_UTF8, 0, line + 7, -1, g_artist, 64);
                 } else if (strncmp(line, "album=", 6) == 0) {
@@ -255,7 +536,10 @@ static void PollNowPlaying(void)
                 } else if (strncmp(line, "status=", 7) == 0) {
                     g_isPlaying = (_strnicmp(line + 7, "PLAY", 4) == 0);
                 } else if (strncmp(line, "position=", 9) == 0) {
-                    g_positionSec = atoi(line + 9);
+                    int rxPos = atoi(line + 9);
+                    if (rxPos > 0 || abs(rxPos - g_positionSec) > 3) {
+                        g_positionSec = rxPos;
+                    }
                 } else if (strncmp(line, "length=", 7) == 0) {
                     g_durationSec = atoi(line + 7);
                 } else if (strncmp(line, "cover=", 6) == 0) {
@@ -266,14 +550,26 @@ static void PollNowPlaying(void)
         }
         CloseHandle(hFile);
 
-        /* Refresh artwork if path changed or new */
-        if (coverPath[0] != L'\0' && _wcsicmp(coverPath, g_lastCoverPath) != 0) {
+        /* Refresh artwork if track changed, path changed, or not yet loaded */
+        BOOL trackChanged = (lstrcmpW(g_title, g_lastTrackTitle) != 0);
+        if (trackChanged) {
+            lstrcpynW(g_lastTrackTitle, g_title, 128);
+        }
+        if (coverPath[0] != L'\0' && (trackChanged || _wcsicmp(coverPath, g_lastCoverPath) != 0)) {
             LoadCoverArt(coverPath);
         } else if (!g_hasCover) {
             if (GetFileAttributesW(COVER_FILE_SDMMC) != 0xFFFFFFFF) LoadCoverArt(COVER_FILE_SDMMC);
             else if (GetFileAttributesW(COVER_FILE_FLASH) != 0xFFFFFFFF) LoadCoverArt(COVER_FILE_FLASH);
         }
+
+        if (gotData && wcsstr(g_statusMsg, L"CMD #") == NULL) {
+            wsprintfW(g_statusMsg, L"STREAM LIVE // %s", g_isPlaying ? L"PLAYING" : L"PAUSED");
+        }
     } else {
+        if (wcsstr(g_statusMsg, L"CMD #") == NULL) {
+            wsprintfW(g_statusMsg, L"WAITING FOR BRIDGE (SERIAL: %ls)...",
+                      g_activeSerialPort[0] ? g_activeSerialPort : L"SCANNING");
+        }
         if (!g_hasCover) {
             if (GetFileAttributesW(COVER_FILE_SDMMC) != 0xFFFFFFFF) LoadCoverArt(COVER_FILE_SDMMC);
             else if (GetFileAttributesW(COVER_FILE_FLASH) != 0xFFFFFFFF) LoadCoverArt(COVER_FILE_FLASH);
@@ -486,7 +782,16 @@ static void OnPaint(HWND hWnd)
         DeleteObject(hPen);
     }
     SetTextColor(memDC, RGB(120, 180, 160));
-    ExtTextOutW(memDC, 15, 238, 0, NULL, g_statusMsg, lstrlenW(g_statusMsg), NULL);
+
+    WCHAR footerBuf[128];
+    if (g_rxPacketCount > 0) {
+        wsprintfW(footerBuf, L"LIVE // %ls (%lu pkts) | %s", g_activeSerialPort, g_rxPacketCount, g_statusMsg);
+    } else if (g_hSerial != INVALID_HANDLE_VALUE) {
+        wsprintfW(footerBuf, L"SERIAL // %ls (connecting...) | %s", g_activeSerialPort, g_statusMsg);
+    } else {
+        wsprintfW(footerBuf, L"STORAGE // %s", g_statusMsg);
+    }
+    ExtTextOutW(memDC, 15, 238, 0, NULL, footerBuf, lstrlenW(footerBuf), NULL);
 
     /* Atomic BitBlt to display */
     BitBlt(hdc, 0, 0, rc.right, rc.bottom, memDC, 0, 0, SRCCOPY);
@@ -506,6 +811,9 @@ static void OnTouch(int x, int y)
         SendMediaCommand("PREV");
     } else if (PtInRect(&g_rcPlay, pt)) {
         g_isPlaying = !g_isPlaying;
+        g_lastLocalTick = GetTickCount();
+        InvalidateRect(g_hWnd, NULL, FALSE);
+        UpdateWindow(g_hWnd);
         SendMediaCommand("PLAY_PAUSE");
     } else if (PtInRect(&g_rcNext, pt)) {
         SendMediaCommand("NEXT");
@@ -556,12 +864,28 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         }
 
         PollNowPlaying();
-        SetTimer(hWnd, TIMER_ID_POLL, 1000, NULL);
+        SetTimer(hWnd, TIMER_ID_POLL, 500, NULL);
         SetTimer(hWnd, TIMER_ID_MARQUEE, 150, NULL);
         return 0;
 
     case WM_TIMER:
         if (wParam == TIMER_ID_POLL) {
+            DWORD nowTick = GetTickCount();
+            if (g_lastLocalTick == 0) g_lastLocalTick = nowTick;
+            DWORD elapsed = nowTick - g_lastLocalTick;
+
+            /* Advance local clock every ~1000ms if playing */
+            if (g_isPlaying && elapsed >= 1000) {
+                int sec = (int)(elapsed / 1000);
+                g_positionSec += sec;
+                if (g_durationSec > 0 && g_positionSec > g_durationSec) {
+                    g_positionSec = g_durationSec;
+                }
+                g_lastLocalTick = nowTick - (elapsed % 1000);
+            } else if (!g_isPlaying) {
+                g_lastLocalTick = nowTick;
+            }
+
             PollNowPlaying();
             InvalidateRect(hWnd, NULL, FALSE);
         } else if (wParam == TIMER_ID_MARQUEE) {
@@ -594,6 +918,10 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
     case WM_DESTROY:
         KillTimer(hWnd, TIMER_ID_POLL);
         KillTimer(hWnd, TIMER_ID_MARQUEE);
+        if (g_hSerial != INVALID_HANDLE_VALUE) {
+            CloseHandle(g_hSerial);
+            g_hSerial = INVALID_HANDLE_VALUE;
+        }
         if (g_coverDC && g_hOldCoverBmp) SelectObject(g_coverDC, g_hOldCoverBmp);
         if (g_hCoverBmp) DeleteObject(g_hCoverBmp);
         if (g_coverDC) DeleteDC(g_coverDC);
@@ -623,9 +951,8 @@ int WINAPI WinMain(
 
     HWND hExisting = FindWindowW(L"MeroMediaWndClass", L"Mero Media");
     if (hExisting) {
-        ShowWindow(hExisting, SW_SHOWNORMAL);
-        SetForegroundWindow(hExisting);
-        return 0;
+        PostMessageW(hExisting, WM_CLOSE, 0, 0);
+        Sleep(50);
     }
 
     memset(&wc, 0, sizeof(wc));
