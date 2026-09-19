@@ -324,32 +324,55 @@ static int KillVendorWatchdog(void)
 
 /* Create desktop shortcut (.lnk) files on Windows CE desktop */
 /* Create desktop shortcut (.lnk) files on Windows CE desktop */
-static void CreateDesktopShortcuts(void)
+/* Copy all latest binaries to ResidentFlash to keep offline storage current */
+static void SyncToResidentFlash(void)
 {
-    HANDLE hFile;
-    DWORD written;
-    const char *lnkShell   = "34#\\ResidentFlash\\MERO\\mero-flash.exe";
-    const char *lnkCmd     = "32#\\ResidentFlash\\MERO\\mero-cmd.exe";
-    const char *lnkGallery = "36#\\ResidentFlash\\MERO\\mero-gallery.exe";
-    const char *lnkTuner   = "34#\\ResidentFlash\\MERO\\mero-tuner.exe";
-    const char *lnkMedia   = "39#\\ResidentFlash\\MERO\\mero-media-ctrl.exe";
-
+    CreateDirectoryW(L"\\ResidentFlash", NULL);
     CreateDirectoryW(L"\\ResidentFlash\\MERO", NULL);
+
+    SetFileAttributesW(L"\\ResidentFlash\\MERO\\mero-shell.exe", FILE_ATTRIBUTE_NORMAL);
+    SetFileAttributesW(L"\\ResidentFlash\\MERO\\mero-cmd.exe", FILE_ATTRIBUTE_NORMAL);
+    SetFileAttributesW(L"\\ResidentFlash\\MERO\\mero-gallery.exe", FILE_ATTRIBUTE_NORMAL);
+    SetFileAttributesW(L"\\ResidentFlash\\MERO\\mero-tuner.exe", FILE_ATTRIBUTE_NORMAL);
+    SetFileAttributesW(L"\\ResidentFlash\\MERO\\mero-media-ctrl.exe", FILE_ATTRIBUTE_NORMAL);
+    SetFileAttributesW(L"\\ResidentFlash\\MERO\\mero-flash.exe", FILE_ATTRIBUTE_NORMAL);
+
     CopyFileW(L"\\SDMMC\\MERO\\mero-shell.exe", L"\\ResidentFlash\\MERO\\mero-shell.exe", FALSE);
     CopyFileW(L"\\SDMMC\\MERO\\mero-cmd.exe", L"\\ResidentFlash\\MERO\\mero-cmd.exe", FALSE);
     CopyFileW(L"\\SDMMC\\MERO\\mero-gallery.exe", L"\\ResidentFlash\\MERO\\mero-gallery.exe", FALSE);
     CopyFileW(L"\\SDMMC\\MERO\\mero-tuner.exe", L"\\ResidentFlash\\MERO\\mero-tuner.exe", FALSE);
     CopyFileW(L"\\SDMMC\\MERO\\mero-media-ctrl.exe", L"\\ResidentFlash\\MERO\\mero-media-ctrl.exe", FALSE);
     CopyFileW(L"\\SDMMC\\MERO\\mero-flash.exe", L"\\ResidentFlash\\MERO\\mero-flash.exe", FALSE);
+    CopyFileW(L"\\SDMMC\\MERO\\display.cfg", L"\\ResidentFlash\\MERO\\display.cfg", FALSE);
+    CopyFileW(L"\\SDMMC\\MERO\\fm.cfg", L"\\ResidentFlash\\MERO\\fm.cfg", FALSE);
+    CopyFileW(L"\\SDMMC\\MERO\\shell.cfg", L"\\ResidentFlash\\MERO\\shell.cfg", FALSE);
     CopyFileW(L"\\SDMMC\\MERO\\mero-shell.ico", L"\\ResidentFlash\\MERO\\mero-shell.ico", FALSE);
     CopyFileW(L"\\SDMMC\\MERO\\mero-cmd.ico", L"\\ResidentFlash\\MERO\\mero-cmd.ico", FALSE);
     CopyFileW(L"\\SDMMC\\MERO\\mero-gallery.ico", L"\\ResidentFlash\\MERO\\mero-gallery.ico", FALSE);
     CopyFileW(L"\\SDMMC\\MERO\\mero-flash.ico", L"\\ResidentFlash\\MERO\\mero-flash.ico", FALSE);
+}
+
+/* Create desktop shortcut (.lnk) files on Windows CE desktop */
+static void CreateDesktopShortcuts(void)
+{
+    HANDLE hFile;
+    DWORD written;
+    const char *lnkShell   = "26#\\SDMMC\\MERO\\mero-shell.exe";
+    const char *lnkCmd     = "24#\\SDMMC\\MERO\\mero-cmd.exe";
+    const char *lnkGallery = "28#\\SDMMC\\MERO\\mero-gallery.exe";
+    const char *lnkTuner   = "26#\\SDMMC\\MERO\\mero-tuner.exe";
+    const char *lnkMedia   = "31#\\SDMMC\\MERO\\mero-media-ctrl.exe";
+
+    SyncToResidentFlash();
 
     CreateDirectoryW(L"\\Windows\\Desktop", NULL);
 
-    /* Remove obsolete confusing duplicate Resident Shell shortcut */
+    /* Delete old/stale shortcuts that might be on desktop */
     DeleteFileW(L"\\Windows\\Desktop\\Resident Shell.lnk");
+    DeleteFileW(L"\\Windows\\Desktop\\YT Music Deck.lnk");
+    DeleteFileW(L"\\Windows\\Desktop\\YouTube Music Deck.lnk");
+    DeleteFileW(L"\\Windows\\Desktop\\Media Visualizer.lnk");
+    DeleteFileW(L"\\Windows\\Desktop\\Display Tuner.lnk");
 
     hFile = CreateFileW(L"\\Windows\\Desktop\\Mero Shell.lnk", GENERIC_WRITE, FILE_SHARE_READ,
                         NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -365,14 +388,14 @@ static void CreateDesktopShortcuts(void)
         CloseHandle(hFile);
     }
 
-    hFile = CreateFileW(L"\\Windows\\Desktop\\Media Visualizer.lnk", GENERIC_WRITE, FILE_SHARE_READ,
+    hFile = CreateFileW(L"\\Windows\\Desktop\\mero-gallery.lnk", GENERIC_WRITE, FILE_SHARE_READ,
                         NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile != INVALID_HANDLE_VALUE) {
         WriteFile(hFile, lnkGallery, (DWORD)strlen(lnkGallery), &written, NULL);
         CloseHandle(hFile);
     }
 
-    hFile = CreateFileW(L"\\Windows\\Desktop\\Display Tuner.lnk", GENERIC_WRITE, FILE_SHARE_READ,
+    hFile = CreateFileW(L"\\Windows\\Desktop\\mero-tuner.lnk", GENERIC_WRITE, FILE_SHARE_READ,
                         NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile != INVALID_HANDLE_VALUE) {
         WriteFile(hFile, lnkTuner, (DWORD)strlen(lnkTuner), &written, NULL);
@@ -385,8 +408,6 @@ static void CreateDesktopShortcuts(void)
         WriteFile(hFile, lnkMedia, (DWORD)strlen(lnkMedia), &written, NULL);
         CloseHandle(hFile);
     }
-    /* Remove obsolete YT Music branding shortcut if it exists */
-    DeleteFileW(L"\\Windows\\Desktop\\YT Music Deck.lnk");
 }
 
 /* Query active HKLM\init\Launch50 boot target */
@@ -1159,19 +1180,6 @@ static void OnPaint(HWND hWnd)
     else if (g_currentPage == PAGE_ADVANCED) pageShort = L"Advanced";
     wsprintfW(buf, L"Foston FS-460BT // WinCE 5.0 Core // SDMMC: Active // %s (%d/4)", pageShort, (int)g_currentPage + 1);
     ExtTextOutW(memDC, 18, 234, 0, NULL, buf, lstrlenW(buf), NULL);
-
-    /* CRT SCAN LINES — 1px dark stripe every 2 rows over the entire frame */
-    {
-        HPEN hScanPen = CreatePen(PS_SOLID, 1, RGB(0, 0, 0));
-        HPEN hScanOld = (HPEN)SelectObject(memDC, hScanPen);
-        int sy;
-        for (sy = 0; sy < rc.bottom; sy += 2) {
-            MoveToEx(memDC, 0, sy, NULL);
-            LineTo(memDC, rc.right, sy);
-        }
-        SelectObject(memDC, hScanOld);
-        DeleteObject(hScanPen);
-    }
 
     /* Atomic BitBlt to display - zero tearing, zero blinking */
     BitBlt(hdc, 0, 0, rc.right, rc.bottom, memDC, 0, 0, SRCCOPY);

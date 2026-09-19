@@ -21,6 +21,14 @@ int WINAPI WinMain(
     (void)nCmdShow;
 
     memset(&pi, 0, sizeof(pi));
+
+    /* If SDMMC is available, keep ResidentFlash updated */
+    if (GetFileAttributesW(L"\\SDMMC\\MERO\\mero-shell.exe") != 0xFFFFFFFF) {
+        CreateDirectoryW(L"\\ResidentFlash\\MERO", NULL);
+        SetFileAttributesW(L"\\ResidentFlash\\MERO\\mero-shell.exe", FILE_ATTRIBUTE_NORMAL);
+        CopyFileW(L"\\SDMMC\\MERO\\mero-shell.exe", L"\\ResidentFlash\\MERO\\mero-shell.exe", FALSE);
+    }
+
     /* Try SDMMC first (latest version), fallback to ResidentFlash */
     if (!CreateProcessW(L"\\SDMMC\\MERO\\mero-shell.exe", NULL, NULL, NULL, FALSE, 0, NULL, NULL, NULL, &pi)) {
         if (!CreateProcessW(L"\\ResidentFlash\\MERO\\mero-shell.exe", NULL, NULL, NULL, FALSE, 0, NULL, NULL, NULL, &pi)) {
