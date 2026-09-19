@@ -57,3 +57,20 @@ Windows CE USB Client Controller
 
 3. **Custom Socket Bridge**:
    Once PPP is up, a simple TCP server running on the WinCE device (via standard Winsock `ws2.dll`) or on the host allows bidirectional streaming of text artifacts, thoughts, and control commands.
+
+## Live Media Sync
+
+`scripts/mero_bridge.py` listens on `192.168.55.101:5000`. `mero-media-ctrl.exe`
+connects to that address and reconnects automatically. The bridge sends newline-delimited
+`MERO:NOW:` and `MERO:WX:` records through the TCP connection.
+
+1. Switch the device to Mass Storage mode and wait for the updated
+   `MERO/mero-media-ctrl.exe` to be copied.
+2. Eject or unmount the SD card cleanly.
+3. Switch the device to ActiveSync mode.
+4. Start PPP with `sudo ./host/bridge/start_internet_ppp.sh`.
+5. Start `mero-media-ctrl.exe` on the device.
+6. Verify that the app header changes from `[SD CACHE]` to `[LIVE SYNC]`.
+
+Do not use the SD card as a live mailbox while WinCE has it mounted. Mass Storage is
+only the deployment path; PPP/TCP carries live state.

@@ -13,12 +13,23 @@
 #include <string.h>
 #include <math.h>
 
-#define TUNER_VERSION       L"0.1.0"
+#define STB_IMAGE_IMPLEMENTATION
+#define STBI_NO_STDIO
+#define STBI_NO_SIMD
+#define STBI_NO_HDR
+#define STBI_NO_LINEAR
+#define STBI_ONLY_JPEG
+#include "stb_image.h"
+#include "suzy_sample.h"
+
+#define TUNER_VERSION       L"0.2.0"
 #define CFG_DIR             L"\\SDMMC\\MERO"
 #define CFG_FILE_SDMMC      L"\\SDMMC\\MERO\\display.cfg"
 #define CFG_FILE_FLASH      L"\\ResidentFlash\\MERO\\display.cfg"
-#define PATH_GALLERY        L"\\SDMMC\\MERO\\mero-gallery.exe"
-#define PATH_SHELL          L"\\SDMMC\\MERO\\mero-shell.exe"
+#define PATH_GALLERY_SD     L"\\SDMMC\\MERO\\mero-gallery.exe"
+#define PATH_GALLERY_FLASH  L"\\ResidentFlash\\MERO\\mero-gallery.exe"
+#define PATH_SHELL_SD       L"\\SDMMC\\MERO\\mero-shell.exe"
+#define PATH_SHELL_FLASH    L"\\ResidentFlash\\MERO\\mero-shell.exe"
 
 static HINSTANCE      g_hInstance = NULL;
 static HWND           g_hWnd = NULL;
@@ -34,7 +45,17 @@ static int            g_backlight  = 8;    /* 1 to 10 */
 
 static unsigned char  g_lut[256];
 static int            g_satScale = 332;
-static WCHAR          g_statusMsg[128] = L"DISPLAY TUNER // TAP [-] / [+] TO ADJUST IN REAL-TIME";
+static WCHAR          g_statusMsg[128] = L"DISPLAY TUNER // TAP [-] / [+] TO CALIBRATE SUZY PREVIEW";
+static BOOL           g_saveFlash = FALSE;
+
+/* Sample Preview (190x125 24bpp) */
+#define PREV_W 190
+#define PREV_H 125
+static unsigned char *g_sampleRgb = NULL;
+static HBITMAP        g_hPrevBmp  = NULL;
+static DWORD         *g_pPrevBits = NULL;
+static HDC            g_prevDC    = NULL;
+static HBITMAP        g_hOldPrev  = NULL;
 
 /* UI Touch Target structure */
 typedef struct {
@@ -117,7 +138,6 @@ static void ApplyHardwareBacklight(int level)
         RegCloseKey(hKey);
     }
 
-    /* Trigger WinCE backlight driver notification event */
     HANDLE hEvt = CreateEventW(NULL, FALSE, FALSE, L"BackLightChangeEvent");
     if (hEvt) {
         SetEvent(hEvt);
@@ -176,6 +196,7 @@ static void SaveConfig(void)
                         CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile != INVALID_HANDLE_VALUE) {
         WriteFile(hFile, buf, (DWORD)strlen(buf), &written, NULL);
+        FlushFileBuffers(hFile);
         CloseHandle(hFile);
     }
 
@@ -183,10 +204,13 @@ static void SaveConfig(void)
                         CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile != INVALID_HANDLE_VALUE) {
         WriteFile(hFile, buf, (DWORD)strlen(buf), &written, NULL);
+        FlushFileBuffers(hFile);
         CloseHandle(hFile);
     }
 
-    wsprintfW(g_statusMsg, L"SUCCESS // Calibration saved to SDMMC & ResidentFlash!");
+    g_saveFlash = TRUE;
+    wsprintfW(g_statusMsg, L"[✓] CALIBRATION SAVED TO SDMMC & FLASH! (LIVE APPLIED)");
+    MessageBeep(MB_OK);
     InvalidateRect(g_hWnd, NULL, FALSE);
 }
 
@@ -203,10 +227,10 @@ static void SetupLayout(void)
         } \
     } while(0)
 
-    int yStart = 38;
-    int yStep  = 36;
+    int yStart = 36;
+    int yStep  = 33;
     int btnW   = 32;
-    int btnH   = 28;
+    int btnH   = 26;
 
     /* 1. Contrast */
     ADD_BTN(BTN_CONTRAST_DEC, 130, yStart, 130 + btnW, yStart + btnH, L" - ", RGB(0, 255, 200));
@@ -230,13 +254,43 @@ static void SetupLayout(void)
 
     /* Bottom Action Deck */
     int bY1 = 226;
-    int bY2 = 262;
-    ADD_BTN(BTN_SAVE,    14,  bY1, 122, bY2, L"SAVE PROFILE", RGB(0, 255, 128));
-    ADD_BTN(BTN_RESET,   130, bY1, 238, bY2, L"RESET DEFAULTS", RGB(255, 180, 0));
-    ADD_BTN(BTN_GALLERY, 246, bY1, 370, bY2, L"OPEN GALLERY", RGB(0, 220, 255));
+    int bY2 = 264;
+    ADD_BTN(BTN_SAVE,    14,  bY1, 126, bY2, L"SAVE PROFILE", RGB(0, 255, 128));
+    ADD_BTN(BTN_RESET,   134, bY1, 246, bY2, L"RESET DEFAULT", RGB(255, 180, 0));
+    ADD_BTN(BTN_GALLERY, 254, bY1, 370, bY2, L"OPEN GALLERY", RGB(0, 220, 255));
     ADD_BTN(BTN_EXIT,    378, bY1, 466, bY2, L"EXIT TO HUB", RGB(255, 80, 80));
 
     #undef ADD_BTN
+}
+
+/* Render the live calibrated Suzy Mero Steele photo into 190x125 DIB */
+static void RenderSamplePhoto(void)
+{
+    if (!g_sampleRgb || !g_pPrevBits) return;
+
+    int y, x;
+    for (y = 0; y < PREV_H; y++) {
+        DWORD *dst = &g_pPrevBits[y * PREV_W];
+        int rowIdx = y * PREV_W * 3;
+        for (x = 0; x < PREV_W; x++) {
+            int p = rowIdx + x * 3;
+            int r = g_lut[g_sampleRgb[p]];
+            int g = g_lut[g_sampleRgb[p + 1]];
+            int b = g_lut[g_sampleRgb[p + 2]];
+
+            if (g_satScale != 256) {
+                int lum = (77 * r + 150 * g + 29 * b) >> 8;
+                r = lum + (((r - lum) * g_satScale) >> 8);
+                g = lum + (((g - lum) * g_satScale) >> 8);
+                b = lum + (((b - lum) * g_satScale) >> 8);
+                if (r < 0) r = 0; else if (r > 255) r = 255;
+                if (g < 0) g = 0; else if (g > 255) g = 255;
+                if (b < 0) b = 0; else if (b > 255) b = 255;
+            }
+
+            dst[x] = ((DWORD)r << 16) | ((DWORD)g << 8) | (DWORD)b;
+        }
+    }
 }
 
 static void OnPaint(HWND hWnd)
@@ -261,32 +315,32 @@ static void OnPaint(HWND hWnd)
     /* Header Bar */
     SetTextColor(memDC, RGB(0, 255, 128));
     wsprintfW(buf, L"MERO // DISPLAY & COLOR TUNER [v%s]", TUNER_VERSION);
-    ExtTextOutW(memDC, 14, 8, 0, NULL, buf, lstrlenW(buf), NULL);
+    ExtTextOutW(memDC, 14, 6, 0, NULL, buf, lstrlenW(buf), NULL);
 
     SetTextColor(memDC, RGB(0, 200, 255));
     wsprintfW(buf, L"TFT 480x272 // %d%% BKL", g_backlight * 10);
-    ExtTextOutW(memDC, 340, 8, 0, NULL, buf, lstrlenW(buf), NULL);
+    ExtTextOutW(memDC, 340, 6, 0, NULL, buf, lstrlenW(buf), NULL);
 
     /* Header Line */
     {
         HPEN hPen = CreatePen(PS_SOLID, 1, RGB(40, 90, 60));
         HPEN hOld = (HPEN)SelectObject(memDC, hPen);
-        MoveToEx(memDC, 14, 26, NULL);
-        LineTo(memDC, g_screenW - 14, 26);
+        MoveToEx(memDC, 14, 24, NULL);
+        LineTo(memDC, g_screenW - 14, 24);
         SelectObject(memDC, hOld);
         DeleteObject(hPen);
     }
 
     /* LEFT COLUMN: 5 CONTROLS */
-    int yStart = 38;
-    int yStep  = 36;
+    int yStart = 34;
+    int yStep  = 33;
 
     /* 1. Contrast */
     SetTextColor(memDC, RGB(200, 200, 200));
     ExtTextOutW(memDC, 16, yStart + 5, 0, NULL, L"CONTRAST:", 9, NULL);
     SetTextColor(memDC, RGB(0, 255, 200));
     wsprintfW(buf, L"%d%%", g_contrast);
-    ExtTextOutW(memDC, 170, yStart + 5, 0, NULL, buf, lstrlenW(buf), NULL);
+    ExtTextOutW(memDC, 168, yStart + 5, 0, NULL, buf, lstrlenW(buf), NULL);
 
     /* 2. Brightness */
     SetTextColor(memDC, RGB(200, 200, 200));
@@ -300,7 +354,7 @@ static void OnPaint(HWND hWnd)
     ExtTextOutW(memDC, 16, yStart + yStep*2 + 5, 0, NULL, L"SATURATION:", 11, NULL);
     SetTextColor(memDC, RGB(0, 255, 200));
     wsprintfW(buf, L"%d%%", g_saturation);
-    ExtTextOutW(memDC, 170, yStart + yStep*2 + 5, 0, NULL, buf, lstrlenW(buf), NULL);
+    ExtTextOutW(memDC, 168, yStart + yStep*2 + 5, 0, NULL, buf, lstrlenW(buf), NULL);
 
     /* 4. Gamma */
     SetTextColor(memDC, RGB(200, 200, 200));
@@ -316,107 +370,86 @@ static void OnPaint(HWND hWnd)
     wsprintfW(buf, L"LVL %d", g_backlight);
     ExtTextOutW(memDC, 170, yStart + yStep*4 + 5, 0, NULL, buf, lstrlenW(buf), NULL);
 
-    /* RIGHT COLUMN: LIVE TEST CANVAS */
-    int px = 265, py = 36, pw = 200, ph = 175;
-    {
-        /* Bounding Box for Test Canvas */
-        HPEN hPen = CreatePen(PS_SOLID, 1, RGB(50, 100, 80));
-        HPEN hOld = (HPEN)SelectObject(memDC, hPen);
-        MoveToEx(memDC, px, py, NULL);
-        LineTo(memDC, px + pw, py);
-        LineTo(memDC, px + pw, py + ph);
-        LineTo(memDC, px, py + ph);
-        LineTo(memDC, px, py);
-        SelectObject(memDC, hOld);
-        DeleteObject(hPen);
-    }
+    /* RIGHT COLUMN: LIVE TEST CANVAS & SUZY PHOTO PREVIEW */
+    int px = 270, py = 30, pw = 196;
 
     /* Grayscale Gradient Ramp (16 blocks) */
-    int rampY = py + 4;
-    int rampH = 22;
-    int blockW = (pw - 8) / 16;
+    int rampY = py;
+    int rampH = 14;
+    int blockW = pw / 16;
     for (i = 0; i < 16; i++) {
         int rawVal = i * 17;
         COLORREF c = CalibrateColor(RGB(rawVal, rawVal, rawVal));
         HBRUSH hBr = CreateSolidBrush(c);
-        RECT blkRc = { px + 4 + i * blockW, rampY, px + 4 + (i + 1) * blockW, rampY + rampH };
+        RECT blkRc = { px + i * blockW, rampY, px + (i + 1) * blockW, rampY + rampH };
         FillRect(memDC, &blkRc, hBr);
         DeleteObject(hBr);
     }
 
     /* Color Bars (6 blocks: Red, Green, Blue, Cyan, Magenta, Yellow) */
-    int barY = rampY + rampH + 4;
-    int barH = 20;
+    int barY = rampY + rampH + 3;
+    int barH = 14;
     COLORREF rawBars[6] = {
         RGB(255, 0, 0), RGB(0, 255, 0), RGB(0, 0, 255),
         RGB(0, 255, 255), RGB(255, 0, 255), RGB(255, 255, 0)
     };
-    int colW = (pw - 8) / 6;
+    int colW = pw / 6;
     for (i = 0; i < 6; i++) {
         COLORREF c = CalibrateColor(rawBars[i]);
         HBRUSH hBr = CreateSolidBrush(c);
-        RECT blkRc = { px + 4 + i * colW, barY, px + 4 + (i + 1) * colW, barY + barH };
+        RECT blkRc = { px + i * colW, barY, px + (i + 1) * colW, barY + barH };
         FillRect(memDC, &blkRc, hBr);
         DeleteObject(hBr);
     }
 
-    /* Dynamic Cybernetic Procedural Landscape (Tests contrast, gradients, and skin/sky tones) */
-    int imgY = barY + barH + 4;
-    int imgH = (py + ph - 4) - imgY;
-    int dy;
-    for (dy = 0; dy < imgH; dy++) {
-        float f = (float)dy / (float)imgH;
-        /* Sky gradient: deep blue into warm orange sunset */
-        int rSky = (int)(20.0f + f * 210.0f);
-        int gSky = (int)(30.0f + f * 110.0f);
-        int bSky = (int)(140.0f - f * 110.0f);
-        COLORREF skyCol = CalibrateColor(RGB(rSky, gSky, bSky));
+    /* REAL-TIME SUZY PHOTO PREVIEW */
+    int photoY = barY + barH + 4;
+    RenderSamplePhoto();
+    if (g_prevDC) {
+        BitBlt(memDC, px + (pw - PREV_W) / 2, photoY, PREV_W, PREV_H, g_prevDC, 0, 0, SRCCOPY);
+    }
 
-        HPEN hPen = CreatePen(PS_SOLID, 1, skyCol);
+    /* Cybernetic Corner Brackets around Photo */
+    {
+        HPEN hBracket = CreatePen(PS_SOLID, 1, RGB(0, 255, 200));
+        HPEN hOld = (HPEN)SelectObject(memDC, hBracket);
+        int bx = px + (pw - PREV_W) / 2;
+        int by = photoY;
+        int bLen = 10;
+        MoveToEx(memDC, bx - 2, by + bLen, NULL); LineTo(memDC, bx - 2, by - 2); LineTo(memDC, bx + bLen, by - 2);
+        MoveToEx(memDC, bx + PREV_W + 1 - bLen, by - 2, NULL); LineTo(memDC, bx + PREV_W + 1, by - 2); LineTo(memDC, bx + PREV_W + 1, by + bLen);
+        MoveToEx(memDC, bx - 2, by + PREV_H + 1 - bLen, NULL); LineTo(memDC, bx - 2, by + PREV_H + 1); LineTo(memDC, bx + bLen, by + PREV_H + 1);
+        MoveToEx(memDC, bx + PREV_W + 1 - bLen, by + PREV_H + 1, NULL); LineTo(memDC, bx + PREV_W + 1, by + PREV_H + 1); LineTo(memDC, bx + PREV_W + 1, by + PREV_H + 1 - bLen);
+        SelectObject(memDC, hOld);
+        DeleteObject(hBracket);
+    }
+
+    /* VISIBLE STATUS LINE (Between Controls and Bottom Deck) */
+    {
+        HPEN hPen = CreatePen(PS_SOLID, 1, RGB(40, 70, 50));
         HPEN hOld = (HPEN)SelectObject(memDC, hPen);
-        MoveToEx(memDC, px + 4, imgY + dy, NULL);
-        LineTo(memDC, px + pw - 4, imgY + dy);
+        MoveToEx(memDC, 14, 202, NULL);
+        LineTo(memDC, g_screenW - 14, 202);
         SelectObject(memDC, hOld);
         DeleteObject(hPen);
     }
 
-    /* Sun sphere in landscape */
-    {
-        COLORREF sunCol = CalibrateColor(RGB(255, 220, 60));
-        HBRUSH hSun = CreateSolidBrush(sunCol);
-        HBRUSH hOldBr = (HBRUSH)SelectObject(memDC, hSun);
-        HPEN hNull = (HPEN)GetStockObject(NULL_PEN);
-        HPEN hOldPen = (HPEN)SelectObject(memDC, hNull);
-        Ellipse(memDC, px + 75, imgY + 12, px + 125, imgY + 62);
-        SelectObject(memDC, hOldPen);
-        SelectObject(memDC, hOldBr);
-        DeleteObject(hSun);
-    }
-
-    /* Silhouette Mountains for shadow/black depth test */
-    {
-        COLORREF darkCol = CalibrateColor(RGB(15, 12, 25));
-        HBRUSH hMtn = CreateSolidBrush(darkCol);
-        POINT pts[5] = {
-            { px + 4, imgY + imgH },
-            { px + 50, imgY + imgH - 35 },
-            { px + 110, imgY + imgH - 18 },
-            { px + 170, imgY + imgH - 45 },
-            { px + pw - 4, imgY + imgH }
-        };
-        HBRUSH hOldBr = (HBRUSH)SelectObject(memDC, hMtn);
-        HPEN hNull = (HPEN)GetStockObject(NULL_PEN);
-        HPEN hOldPen = (HPEN)SelectObject(memDC, hNull);
-        Polygon(memDC, pts, 5);
-        SelectObject(memDC, hOldPen);
-        SelectObject(memDC, hOldBr);
-        DeleteObject(hMtn);
-    }
+    SetTextColor(memDC, g_saveFlash ? RGB(0, 255, 128) : RGB(140, 200, 170));
+    ExtTextOutW(memDC, 14, 206, 0, NULL, g_statusMsg, lstrlenW(g_statusMsg), NULL);
 
     /* DRAW INTERACTIVE TOUCH BUTTONS */
     for (i = 0; i < g_buttonCount; i++) {
         RECT bRc = g_buttons[i].rc;
-        HPEN hPen = CreatePen(PS_SOLID, 1, g_buttons[i].color);
+        COLORREF bCol = g_buttons[i].color;
+
+        if (g_buttons[i].id == BTN_SAVE && g_saveFlash) {
+            bCol = RGB(0, 255, 128);
+            HBRUSH hFill = CreateSolidBrush(RGB(10, 60, 30));
+            FillRect(memDC, &bRc, hFill);
+            DeleteObject(hFill);
+        }
+
+        HPEN hPen = CreatePen(PS_SOLID, 1, bCol);
         HPEN hOld = (HPEN)SelectObject(memDC, hPen);
 
         MoveToEx(memDC, bRc.left, bRc.top, NULL);
@@ -428,21 +461,9 @@ static void OnPaint(HWND hWnd)
         SelectObject(memDC, hOld);
         DeleteObject(hPen);
 
-        SetTextColor(memDC, g_buttons[i].color);
+        SetTextColor(memDC, (g_buttons[i].id == BTN_SAVE && g_saveFlash) ? RGB(255, 255, 255) : bCol);
         DrawTextW(memDC, g_buttons[i].label, -1, &bRc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
-
-    /* Status footer */
-    {
-        HPEN hPen = CreatePen(PS_SOLID, 1, RGB(30, 60, 40));
-        HPEN hOld = (HPEN)SelectObject(memDC, hPen);
-        MoveToEx(memDC, 14, 218, NULL);
-        LineTo(memDC, g_screenW - 14, 218);
-        SelectObject(memDC, hOld);
-        DeleteObject(hPen);
-    }
-    SetTextColor(memDC, RGB(120, 180, 150));
-    ExtTextOutW(memDC, 14, 268, 0, NULL, g_statusMsg, lstrlenW(g_statusMsg), NULL);
 
     /* Atomic Blit to LCD */
     BitBlt(hdc, 0, 0, rc.right, rc.bottom, memDC, 0, 0, SRCCOPY);
@@ -459,6 +480,7 @@ static void OnTouch(int x, int y)
     int i;
     for (i = 0; i < g_buttonCount; i++) {
         if (PtInRect(&g_buttons[i].rc, (POINT){ x, y })) {
+            g_saveFlash = FALSE;
             switch (g_buttons[i].id) {
             case BTN_CONTRAST_DEC:
                 if (g_contrast > 50) g_contrast -= 5;
@@ -534,11 +556,17 @@ static void OnTouch(int x, int y)
                 {
                     PROCESS_INFORMATION pi;
                     memset(&pi, 0, sizeof(pi));
-                    if (CreateProcessW(PATH_GALLERY, NULL, NULL, NULL, FALSE, 0, NULL, NULL, NULL, &pi)) {
+                    BOOL ok = CreateProcessW(PATH_GALLERY_SD, NULL, NULL, NULL, FALSE, 0, NULL, NULL, NULL, &pi);
+                    if (!ok) {
+                        ok = CreateProcessW(PATH_GALLERY_FLASH, NULL, NULL, NULL, FALSE, 0, NULL, NULL, NULL, &pi);
+                    }
+                    if (ok) {
                         CloseHandle(pi.hProcess);
                         CloseHandle(pi.hThread);
                         DestroyWindow(g_hWnd);
                         return;
+                    } else {
+                        wsprintfW(g_statusMsg, L"ERR // Gallery binary not found in SDMMC or Flash");
                     }
                 }
                 break;
@@ -547,15 +575,18 @@ static void OnTouch(int x, int y)
                 {
                     PROCESS_INFORMATION pi;
                     memset(&pi, 0, sizeof(pi));
-                    if (!CreateProcessW(PATH_SHELL, NULL, NULL, NULL, FALSE, 0, NULL, NULL, NULL, &pi)) {
-                        CreateProcessW(L"\\ResidentFlash\\MERO\\mero-shell.exe", NULL, NULL, NULL, FALSE, 0, NULL, NULL, NULL, &pi);
+                    BOOL ok = CreateProcessW(PATH_SHELL_SD, NULL, NULL, NULL, FALSE, 0, NULL, NULL, NULL, &pi);
+                    if (!ok) {
+                        ok = CreateProcessW(PATH_SHELL_FLASH, NULL, NULL, NULL, FALSE, 0, NULL, NULL, NULL, &pi);
                     }
-                    if (pi.hProcess) {
+                    if (ok) {
                         CloseHandle(pi.hProcess);
                         CloseHandle(pi.hThread);
+                        DestroyWindow(g_hWnd);
+                        return;
+                    } else {
+                        wsprintfW(g_statusMsg, L"ERR // Shell binary not found in SDMMC or Flash");
                     }
-                    DestroyWindow(g_hWnd);
-                    return;
                 }
                 break;
             }
@@ -571,6 +602,36 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
     switch (uMsg) {
     case WM_CREATE:
         g_hWnd = hWnd;
+
+        /* Decode Suzy Mero Steele sample preview from embedded memory */
+        {
+            int w = 0, h = 0, ch = 0;
+            unsigned char *decoded = stbi_load_from_memory(g_suzySampleJpeg, SUZY_SAMPLE_LEN, &w, &h, &ch, 3);
+            if (decoded && w == PREV_W && h == PREV_H) {
+                g_sampleRgb = decoded;
+            } else if (decoded) {
+                stbi_image_free(decoded);
+            }
+        }
+
+        /* Create 190x125 32bpp DIB for real-time sample rendering */
+        {
+            HDC hdc = GetDC(hWnd);
+            BITMAPINFO bmi;
+            memset(&bmi, 0, sizeof(bmi));
+            bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+            bmi.bmiHeader.biWidth = PREV_W;
+            bmi.bmiHeader.biHeight = -PREV_H; /* Top-down DIB */
+            bmi.bmiHeader.biPlanes = 1;
+            bmi.bmiHeader.biBitCount = 32;
+            bmi.bmiHeader.biCompression = BI_RGB;
+
+            g_hPrevBmp = CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, (void**)&g_pPrevBits, NULL, 0);
+            g_prevDC = CreateCompatibleDC(hdc);
+            g_hOldPrev = (HBITMAP)SelectObject(g_prevDC, g_hPrevBmp);
+            ReleaseDC(hWnd, hdc);
+        }
+
         SetupLayout();
         LoadConfig();
         return 0;
@@ -587,6 +648,10 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         return 0;
 
     case WM_DESTROY:
+        if (g_prevDC && g_hOldPrev) SelectObject(g_prevDC, g_hOldPrev);
+        if (g_hPrevBmp) DeleteObject(g_hPrevBmp);
+        if (g_prevDC) DeleteDC(g_prevDC);
+        if (g_sampleRgb) stbi_image_free(g_sampleRgb);
         PostQuitMessage(0);
         return 0;
     }

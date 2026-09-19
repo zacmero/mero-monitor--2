@@ -76,6 +76,9 @@ cleanup() {
     iptables -t nat -D POSTROUTING -s 192.168.55.0/24 -o "$WAN_IFACE" -j MASQUERADE 2>/dev/null || true
     iptables -D FORWARD -s 192.168.55.0/24 -i ppp+ -o "$WAN_IFACE" -j ACCEPT 2>/dev/null || true
     iptables -D FORWARD -d 192.168.55.0/24 -i "$WAN_IFACE" -o ppp+ -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
+    if command -v firewall-cmd &>/dev/null; then
+        firewall-cmd --quiet --zone=trusted --remove-interface=ppp0 2>/dev/null || true
+    fi
     echo -e "${GREEN}[+] Teardown complete.${NC}"
 }
 trap cleanup EXIT INT TERM
@@ -89,6 +92,12 @@ echo -e "${CYAN}[*] Setting up iptables NAT rules for 192.168.55.0/24 -> ${WAN_I
 iptables -t nat -A POSTROUTING -s 192.168.55.0/24 -o "$WAN_IFACE" -j MASQUERADE
 iptables -A FORWARD -s 192.168.55.0/24 -i ppp+ -o "$WAN_IFACE" -j ACCEPT
 iptables -A FORWARD -d 192.168.55.0/24 -i "$WAN_IFACE" -o ppp+ -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+
+# The media app connects to the host over ppp0. Firewalld otherwise assigns
+# the transient interface to its default zone and drops TCP port 5000.
+if command -v firewall-cmd &>/dev/null; then
+    firewall-cmd --quiet --zone=trusted --add-interface=ppp0
+fi
 
 # 8. Start pppd with Windows CE ActiveSync handshake
 echo -e "${GREEN}[+] Starting PPP daemon with ActiveSync handshake...${NC}"
@@ -111,4 +120,4 @@ pppd "$SERIAL_DEV" 115200 \
     proxyarp \
     ktune \
     nodetach \
-    connect "/usr/bin/chat -v -t 15 '' 'CLIENT' 'CLIENTSERVER'"
+    connect "/usr/bin/chat -v -t 30 'CLIENT' 'CLIENTSERVER\\c'"

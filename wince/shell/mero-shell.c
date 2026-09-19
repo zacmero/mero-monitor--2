@@ -57,18 +57,24 @@ static const WCHAR   *g_bootTargetNames[] = {
 };
 
 typedef enum {
-    AUTOLAUNCH_NONE = 0,
-    AUTOLAUNCH_GALLERY = 1,
-    AUTOLAUNCH_CMD = 2,
-    AUTOLAUNCH_PROBE = 3,
-    AUTOLAUNCH_COUNT = 4
+    AUTOLAUNCH_NONE     = 0,
+    AUTOLAUNCH_GALLERY  = 1,
+    AUTOLAUNCH_MEDIA    = 2,
+    AUTOLAUNCH_TUNER    = 3,
+    AUTOLAUNCH_CAM      = 4,
+    AUTOLAUNCH_CMD      = 5,
+    AUTOLAUNCH_PROBE    = 6,
+    AUTOLAUNCH_COUNT    = 7
 } AutoLaunchPref;
 
 static const WCHAR *g_prefNames[] = {
     L"NONE (Direct Shell)",
-    L"MEDIA VISUALIZER",
-    L"MERO CMD SHELL",
-    L"HARDWARE PROBE"
+    L"mero-gallery.exe",
+    L"mero-media-ctrl.exe",
+    L"mero-tuner.exe",
+    L"mero-cam.exe",
+    L"mero-cmd.exe",
+    L"mero-probe.exe"
 };
 
 typedef enum {
@@ -142,15 +148,12 @@ static void LoadConfig(void)
     g_countdownSeconds = 0;
     g_countdownActive = FALSE;
 
-    hFile = CreateFileW(
-        CFG_FILE,
-        GENERIC_READ,
-        FILE_SHARE_READ,
-        NULL,
-        OPEN_EXISTING,
-        FILE_ATTRIBUTE_NORMAL,
-        NULL
-    );
+    hFile = CreateFileW(CFG_FILE, GENERIC_READ, FILE_SHARE_READ, NULL,
+                        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile == INVALID_HANDLE_VALUE) {
+        hFile = CreateFileW(L"\\ResidentFlash\\MERO\\shell.cfg", GENERIC_READ, FILE_SHARE_READ, NULL,
+                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    }
 
     if (hFile != INVALID_HANDLE_VALUE) {
         memset(buffer, 0, sizeof(buffer));
@@ -163,6 +166,20 @@ static void LoadConfig(void)
             }
         }
         CloseHandle(hFile);
+    }
+
+    /* Registry fallback: if both cfg files were missing, read last known pref from HKLM */
+    if (g_pref == AUTOLAUNCH_NONE) {
+        HKEY hKey;
+        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"Software\\Mero", 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+            DWORD val = 0, valLen = sizeof(val);
+            if (RegQueryValueExW(hKey, L"AutoLaunch", NULL, NULL, (LPBYTE)&val, &valLen) == ERROR_SUCCESS) {
+                if (val > 0 && val < (DWORD)AUTOLAUNCH_COUNT) {
+                    g_pref = (AutoLaunchPref)val;
+                }
+            }
+            RegCloseKey(hKey);
+        }
     }
 
     if (g_pref != AUTOLAUNCH_NONE) {
@@ -182,21 +199,37 @@ static void SaveConfig(void)
     int len;
 
     CreateDirectoryW(CFG_DIR, NULL);
+    CreateDirectoryW(L"\\ResidentFlash\\MERO", NULL);
 
-    hFile = CreateFileW(
-        CFG_FILE,
-        GENERIC_WRITE,
-        FILE_SHARE_READ,
-        NULL,
-        CREATE_ALWAYS,
-        FILE_ATTRIBUTE_NORMAL,
-        NULL
-    );
+    len = sprintf(buffer, "autolaunch=%d\r\ntimeout=3\r\n", (int)g_pref);
 
+    /* Write SDMMC config */
+    hFile = CreateFileW(CFG_FILE, GENERIC_WRITE, FILE_SHARE_READ, NULL,
+                        CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile != INVALID_HANDLE_VALUE) {
-        len = sprintf(buffer, "autolaunch=%d\r\ntimeout=3\r\n", (int)g_pref);
         WriteFile(hFile, buffer, (DWORD)len, &bytesWritten, NULL);
+        FlushFileBuffers(hFile);
         CloseHandle(hFile);
+    }
+
+    /* Write ResidentFlash config */
+    hFile = CreateFileW(L"\\ResidentFlash\\MERO\\shell.cfg", GENERIC_WRITE, FILE_SHARE_READ, NULL,
+                        CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile != INVALID_HANDLE_VALUE) {
+        WriteFile(hFile, buffer, (DWORD)len, &bytesWritten, NULL);
+        FlushFileBuffers(hFile);
+        CloseHandle(hFile);
+    }
+
+    /* Registry fallback — survives cold boots where SD may be unavailable at startup */
+    {
+        HKEY hKey;
+        if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, L"Software\\Mero", 0, NULL, 0, 0, NULL, &hKey, NULL) == ERROR_SUCCESS) {
+            DWORD val = (DWORD)g_pref;
+            RegSetValueExW(hKey, L"AutoLaunch", 0, REG_DWORD, (const BYTE*)&val, sizeof(DWORD));
+            RegFlushKey(HKEY_LOCAL_MACHINE);
+            RegCloseKey(hKey);
+        }
     }
 }
 
@@ -255,6 +288,12 @@ static int KillVendorWatchdog(void)
         ShowWindow(hWndPhone, SW_HIDE);
         EnableWindow(hWndPhone, FALSE);
     }
+    HWND hWndComm = FindWindowW(NULL, L"Cannot start communications with the desktop computer.");
+    if (hWndComm) PostMessageW(hWndComm, WM_CLOSE, 0, 0);
+    HWND hWndComm2 = FindWindowW(NULL, L"Communications Error");
+    if (hWndComm2) PostMessageW(hWndComm2, WM_CLOSE, 0, 0);
+    HWND hWndRepl = FindWindowW(NULL, L"Repllog");
+    if (hWndRepl) PostMessageW(hWndRepl, WM_CLOSE, 0, 0);
 
     hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (hSnap != INVALID_HANDLE_VALUE) {
@@ -265,7 +304,9 @@ static int KillVendorWatchdog(void)
                     _wcsicmp(pe.szExeFile, L"PhoneLink.exe") == 0 ||
                     _wcsicmp(pe.szExeFile, L"Launch.exe") == 0 ||
                     _wcsicmp(pe.szExeFile, L"Main.exe") == 0 ||
-                    _wcsicmp(pe.szExeFile, L"YFMenu.exe") == 0) {
+                    _wcsicmp(pe.szExeFile, L"YFMenu.exe") == 0 ||
+                    _wcsicmp(pe.szExeFile, L"repllog.exe") == 0 ||
+                    _wcsicmp(pe.szExeFile, L"rnaapp.exe") == 0) {
                     
                     HANDLE hProc = OpenProcess(0x0001 /* PROCESS_TERMINATE */, FALSE, pe.th32ProcessID);
                     if (hProc) {
@@ -338,12 +379,14 @@ static void CreateDesktopShortcuts(void)
         CloseHandle(hFile);
     }
 
-    hFile = CreateFileW(L"\\Windows\\Desktop\\YT Music Deck.lnk", GENERIC_WRITE, FILE_SHARE_READ,
+    hFile = CreateFileW(L"\\Windows\\Desktop\\mero-media-ctrl.lnk", GENERIC_WRITE, FILE_SHARE_READ,
                         NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile != INVALID_HANDLE_VALUE) {
         WriteFile(hFile, lnkMedia, (DWORD)strlen(lnkMedia), &written, NULL);
         CloseHandle(hFile);
     }
+    /* Remove obsolete YT Music branding shortcut if it exists */
+    DeleteFileW(L"\\Windows\\Desktop\\YT Music Deck.lnk");
 }
 
 /* Query active HKLM\init\Launch50 boot target */
@@ -705,6 +748,70 @@ static void PerformSystemDump(void)
     }
     WRITE_STR("\r\n");
 
+    /* 3b. Registry HKLM\\Drivers\\Active (Currently Loaded Stream Drivers) */
+    WRITE_STR("[REGISTRY: HKEY_LOCAL_MACHINE\\Drivers\\Active (Loaded Drivers & COM Ports)]\r\n");
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"Drivers\\Active", 0, 0, &hKey) == ERROR_SUCCESS) {
+        DWORD index = 0;
+        WCHAR subKeyName[128];
+        DWORD subLen;
+
+        while (1) {
+            subLen = sizeof(subKeyName) / sizeof(subKeyName[0]);
+            if (RegEnumKeyExW(hKey, index++, subKeyName, &subLen, NULL, NULL, NULL, NULL) != ERROR_SUCCESS) {
+                break;
+            }
+            HKEY hSub;
+            if (RegOpenKeyExW(hKey, subKeyName, 0, 0, &hSub) == ERROR_SUCCESS) {
+                WCHAR keyVal[128] = { 0 };
+                WCHAR nameVal[64] = { 0 };
+                DWORD kLen = sizeof(keyVal);
+                DWORD nLen = sizeof(nameVal);
+                RegQueryValueExW(hSub, L"Key", NULL, NULL, (BYTE*)keyVal, &kLen);
+                RegQueryValueExW(hSub, L"Name", NULL, NULL, (BYTE*)nameVal, &nLen);
+                RegCloseKey(hSub);
+                snprintf(line, sizeof(line), "  ACTIVE: [%ls] Name=\"%ls\" Key=\"%ls\"\r\n", subKeyName, nameVal, keyVal);
+                WRITE_STR(line);
+            }
+        }
+        RegCloseKey(hKey);
+    }
+    WRITE_STR("\r\n");
+
+    /* 3c. Registry HKLM\\Drivers\\USB\\FunctionDrivers */
+    WRITE_STR("[REGISTRY: HKEY_LOCAL_MACHINE\\Drivers\\USB\\FunctionDrivers]\r\n");
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"Drivers\\USB\\FunctionDrivers", 0, 0, &hKey) == ERROR_SUCCESS) {
+        DWORD index = 0;
+        WCHAR subKeyName[128];
+        DWORD subLen;
+        WCHAR defClient[64] = { 0 };
+        DWORD defLen = sizeof(defClient);
+        RegQueryValueExW(hKey, L"DefaultClientDriver", NULL, NULL, (BYTE*)defClient, &defLen);
+        snprintf(line, sizeof(line), "  DefaultClientDriver = \"%ls\"\r\n", defClient);
+        WRITE_STR(line);
+
+        while (1) {
+            subLen = sizeof(subKeyName) / sizeof(subKeyName[0]);
+            if (RegEnumKeyExW(hKey, index++, subKeyName, &subLen, NULL, NULL, NULL, NULL) != ERROR_SUCCESS) {
+                break;
+            }
+            HKEY hSub;
+            if (RegOpenKeyExW(hKey, subKeyName, 0, 0, &hSub) == ERROR_SUCCESS) {
+                WCHAR dllVal[64] = { 0 }, prefixVal[32] = { 0 };
+                DWORD idxVal = 0;
+                DWORD dLen = sizeof(dllVal), pLen = sizeof(prefixVal), iLen = sizeof(idxVal);
+                RegQueryValueExW(hSub, L"Dll", NULL, NULL, (BYTE*)dllVal, &dLen);
+                RegQueryValueExW(hSub, L"Prefix", NULL, NULL, (BYTE*)prefixVal, &pLen);
+                RegQueryValueExW(hSub, L"Index", NULL, NULL, (BYTE*)&idxVal, &iLen);
+                RegCloseKey(hSub);
+                snprintf(line, sizeof(line), "  USB FN: [%ls] Dll=\"%ls\" Prefix=\"%ls\" Index=%lu\r\n",
+                         subKeyName, dllVal, prefixVal, idxVal);
+                WRITE_STR(line);
+            }
+        }
+        RegCloseKey(hKey);
+    }
+    WRITE_STR("\r\n");
+
     /* 4. Scan \\ResidentFlash for vendor apps, inis, bmps */
     WRITE_STR("[FILES IN \\ResidentFlash (Internal Storage)]\r\n");
     hFind = FindFirstFileW(L"\\ResidentFlash\\*.*", &wfd);
@@ -824,7 +931,7 @@ static void UpdateButtons(void)
     case PAGE_MAIN:
         /* PAGE 0: Mero OS Core Hub */
         lstrcpyW(g_buttons[0].title, L"[1] COMPANION LABS >>");
-        lstrcpyW(g_buttons[0].sub,   L"Gallery, Cam, YT Music, VU Deck");
+        lstrcpyW(g_buttons[0].sub,   L"Gallery, YT Music, Tuner, Cam, VU");
         g_buttons[0].color = RGB(0, 255, 128);
 
         lstrcpyW(g_buttons[1].title, L"[2] MERO CMD SHELL");
@@ -850,28 +957,28 @@ static void UpdateButtons(void)
 
     case PAGE_COMPANIONS:
         /* PAGE 1: Custom Companion Applications Suite */
-        lstrcpyW(g_buttons[0].title, L"[1] MEDIA VISUALIZER");
-        lstrcpyW(g_buttons[0].sub,   L"Living Picture Frame & Gallery");
+        lstrcpyW(g_buttons[0].title, L"mero-gallery.exe");
+        lstrcpyW(g_buttons[0].sub,   L"[1] media visualizer + gallery");
         g_buttons[0].color = RGB(0, 255, 128);
 
-        lstrcpyW(g_buttons[1].title, L"[2] YOUTUBE MUSIC");
-        lstrcpyW(g_buttons[1].sub,   L"Now Playing Deck & Controls");
-        g_buttons[1].color = RGB(255, 70, 70);
+        lstrcpyW(g_buttons[1].title, L"mero-media-ctrl.exe");
+        lstrcpyW(g_buttons[1].sub,   L"[2] now playing deck + controls");
+        g_buttons[1].color = RGB(0, 200, 255);
 
-        lstrcpyW(g_buttons[2].title, L"[3] DARKHORSE CAM");
-        lstrcpyW(g_buttons[2].sub,   L"Desktop Webcam Feed Monitor");
-        g_buttons[2].color = RGB(0, 220, 255);
+        lstrcpyW(g_buttons[2].title, L"mero-tuner.exe");
+        lstrcpyW(g_buttons[2].sub,   L"[3] display color calibrator");
+        g_buttons[2].color = RGB(255, 140, 40);
 
-        lstrcpyW(g_buttons[3].title, L"[4] AUDIO SPECTRUM VU");
-        lstrcpyW(g_buttons[3].sub,   L"Hardware Audio VU Meter");
-        g_buttons[3].color = RGB(255, 180, 0);
+        lstrcpyW(g_buttons[3].title, L"mero-cam.exe");
+        lstrcpyW(g_buttons[3].sub,   L"[4] desktop webcam feed");
+        g_buttons[3].color = RGB(0, 220, 255);
 
-        lstrcpyW(g_buttons[4].title, L"[5] THOUGHT TERMINAL");
-        lstrcpyW(g_buttons[4].sub,   L"Brain Log & Scratch Notes");
-        g_buttons[4].color = RGB(180, 140, 255);
+        lstrcpyW(g_buttons[4].title, L"mero-vis.exe");
+        lstrcpyW(g_buttons[4].sub,   L"[5] audio spectrum vu meter");
+        g_buttons[4].color = RGB(255, 180, 0);
 
         lstrcpyW(g_buttons[5].title, L"[6] << BACK TO MAIN");
-        lstrcpyW(g_buttons[5].sub,   L"Return to Main OS Hub");
+        lstrcpyW(g_buttons[5].sub,   L"return to main os hub");
         g_buttons[5].color = RGB(160, 160, 160);
         break;
 
@@ -1053,6 +1160,19 @@ static void OnPaint(HWND hWnd)
     wsprintfW(buf, L"Foston FS-460BT // WinCE 5.0 Core // SDMMC: Active // %s (%d/4)", pageShort, (int)g_currentPage + 1);
     ExtTextOutW(memDC, 18, 234, 0, NULL, buf, lstrlenW(buf), NULL);
 
+    /* CRT SCAN LINES — 1px dark stripe every 2 rows over the entire frame */
+    {
+        HPEN hScanPen = CreatePen(PS_SOLID, 1, RGB(0, 0, 0));
+        HPEN hScanOld = (HPEN)SelectObject(memDC, hScanPen);
+        int sy;
+        for (sy = 0; sy < rc.bottom; sy += 2) {
+            MoveToEx(memDC, 0, sy, NULL);
+            LineTo(memDC, rc.right, sy);
+        }
+        SelectObject(memDC, hScanOld);
+        DeleteObject(hScanPen);
+    }
+
     /* Atomic BitBlt to display - zero tearing, zero blinking */
     BitBlt(hdc, 0, 0, rc.right, rc.bottom, memDC, 0, 0, SRCCOPY);
 
@@ -1083,7 +1203,7 @@ static void OnTouch(int x, int y)
                 switch (i) {
                 case 0: /* Open Companion Suite Submenu */
                     g_currentPage = PAGE_COMPANIONS;
-                    wsprintfW(g_statusMsg, L"Companion Apps: Gallery, YouTube Deck, Webcam Feed, Audio VU");
+                    wsprintfW(g_statusMsg, L"Companion Apps // tap app to launch");
                     InvalidateRect(g_hWnd, NULL, FALSE);
                     break;
 
@@ -1149,7 +1269,17 @@ static void OnTouch(int x, int y)
                     }
                     break;
 
-                case 2: /* Darkhorse Webcam Visualizer */
+                case 2: /* Display & Color Tuner */
+                    wsprintfW(g_statusMsg, L"Launching Display & Color Tuner...");
+                    InvalidateRect(g_hWnd, NULL, FALSE);
+                    UpdateWindow(g_hWnd);
+                    if (!LaunchApp(PATH_TUNER, TRUE)) {
+                        wsprintfW(g_statusMsg, L"Display Tuner not found: %s", PATH_TUNER);
+                        InvalidateRect(g_hWnd, NULL, FALSE);
+                    }
+                    break;
+
+                case 3: /* Darkhorse Webcam Visualizer */
                     wsprintfW(g_statusMsg, L"Launching Darkhorse Webcam Monitor...");
                     InvalidateRect(g_hWnd, NULL, FALSE);
                     UpdateWindow(g_hWnd);
@@ -1159,22 +1289,12 @@ static void OnTouch(int x, int y)
                     }
                     break;
 
-                case 3: /* Audio Spectrum VU Meter */
+                case 4: /* Audio Spectrum VU Meter */
                     wsprintfW(g_statusMsg, L"Launching Audio Spectrum VU Meter...");
                     InvalidateRect(g_hWnd, NULL, FALSE);
                     UpdateWindow(g_hWnd);
                     if (!LaunchApp(PATH_VIS, TRUE)) {
                         wsprintfW(g_statusMsg, L"Audio VU Deck: Audio subsystem ready; app in build queue");
-                        InvalidateRect(g_hWnd, NULL, FALSE);
-                    }
-                    break;
-
-                case 4: /* Thought Terminal */
-                    wsprintfW(g_statusMsg, L"Launching Thought Terminal...");
-                    InvalidateRect(g_hWnd, NULL, FALSE);
-                    UpdateWindow(g_hWnd);
-                    if (!LaunchApp(PATH_TERMINAL, TRUE)) {
-                        wsprintfW(g_statusMsg, L"Terminal binary not found: %s", PATH_TERMINAL);
                         InvalidateRect(g_hWnd, NULL, FALSE);
                     }
                     break;
@@ -1366,6 +1486,9 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
                     UpdateWindow(hWnd);
                     /* Execute preferred */
                     if (g_pref == AUTOLAUNCH_GALLERY) LaunchApp(PATH_GALLERY, TRUE);
+                    else if (g_pref == AUTOLAUNCH_MEDIA) LaunchApp(PATH_MEDIA_CTRL, TRUE);
+                    else if (g_pref == AUTOLAUNCH_TUNER) LaunchApp(PATH_TUNER, TRUE);
+                    else if (g_pref == AUTOLAUNCH_CAM) LaunchApp(PATH_CAM, TRUE);
                     else if (g_pref == AUTOLAUNCH_CMD) LaunchApp(PATH_CMD, TRUE);
                     else if (g_pref == AUTOLAUNCH_PROBE) LaunchApp(PATH_PROBE, TRUE);
                 }
