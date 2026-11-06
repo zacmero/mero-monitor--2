@@ -1,12 +1,6 @@
 #!/usr/bin/env python3
-"""
-mero_bridge.py - Unified Host Bridge for Mero Companion Deck
-Project: mero-monitor-#2
-Features:
-  1. YouTube Music / MPRIS: Strictly binds to music.youtube.com, real-time metadata,
-     accurate position, duration, and HD album art extraction (never hijacked by normal YouTube tabs).
-  2. Cyberpunk Meteorological Telemetry: Live weather, humidity, wind, pressure, UV, 3-day forecast (wttr.in).
-  3. ActiveSync PPP/TCP streaming, with SDMMC used only for deployment.
+"""Host weather and cinema bridge. Legacy media utilities remain available.
+Runtime uses PPP/TCP only; never auto-mount or auto-deploy to a live device.
 """
 
 import os
@@ -19,13 +13,14 @@ import urllib.request
 import urllib.parse
 import subprocess
 import socket
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from PIL import Image
 
 DEFAULT_MOUNT = Path("/run/media/zacmero/6232-3562")
 DEV_UUID = "6232-3562"
 STREAM_HOST = "192.168.55.101"
 STREAM_PORT = 5000
+STREAM_PEER = "192.168.55.100"
 
 # Media state
 last_art_url = ""
@@ -42,6 +37,7 @@ cached_weather_content = ""
 # PPP/TCP stream state
 stream_listener = None
 stream_client = None
+stream_clients = []
 last_stream_send_time = 0.0
 latest_weather_line = ""
 
@@ -121,25 +117,44 @@ def init_stream_server():
             listener.close()
 
 
+def protocol_value(value):
+    return str(value).replace("|", "/").replace("\r", " ").replace("\n", " ")
+
+
+def cinema_active():
+    state_home = Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state")))
+    # ArchMerOS writes state before blanking displays and removes it after restore.
+    return (state_home / "archmeros" / "cinema-mode.json").is_file()
+
+
 def send_stream(line):
-    global stream_client
+    """Service all attached apps, including when no media player is running."""
     init_stream_server()
     if stream_listener is None:
         return
-    if stream_client is None:
+    while True:
         try:
-            stream_client, address = stream_listener.accept()
-            stream_client.settimeout(0.2)
-            print(f"[+] WinCE media client connected from {address[0]}")
-            if latest_weather_line:
-                stream_client.sendall((latest_weather_line + "\n").encode("utf-8"))
+            client, address = stream_listener.accept()
+            if address[0] != STREAM_PEER:
+                client.close()
+                continue
+            client.settimeout(0.05)
+            stream_clients.append(client)
+            if len(stream_clients) > 8:
+                stream_clients.pop(0).close()
+            print(f"[+] WinCE client connected from {address[0]}")
         except BlockingIOError:
-            return
-    try:
-        stream_client.sendall((line.strip() + "\n").encode("utf-8"))
-    except OSError:
-        stream_client.close()
-        stream_client = None
+            break
+        except OSError as error:
+            print(f"[!] Accept error: {error}")
+            break
+    payload = (line.strip() + "\n").encode("utf-8")
+    for client in list(stream_clients):
+        try:
+            client.sendall(payload)
+        except OSError:
+            client.close()
+            stream_clients.remove(client)
 
 
 # ====================================================================
@@ -191,7 +206,10 @@ def fetch_weather(sd_mount=None):
             headers={"User-Agent": "curl/7.88.1 (Mero-Companion-Deck)"}
         )
         with urllib.request.urlopen(req, timeout=8) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
+            data = json.loads(resp.read().decode("utf-8"), object_hook=lambda mapping: {
+                key: protocol_value(value) if isinstance(value, str) else value
+                for key, value in mapping.items()
+            })
 
         cc = data["current_condition"][0]
         area = data["nearest_area"][0]
@@ -232,8 +250,6 @@ def fetch_weather(sd_mount=None):
             f"d3_max={w[2]['maxtempC']}\n"
         )
 
-        cached_weather_content = content
-        last_weather_fetch = now
 
         # Write to SD card in-place
         if sd_mount:
@@ -248,13 +264,14 @@ def fetch_weather(sd_mount=None):
                 print(f"[!] Weather write error: {e}")
 
         # Broadcast over ActiveSync PPP/TCP.
-        wx_line = (
-            f"MERO:WX:temp={cc['temp_C']}|feels={cc['FeelsLikeC']}|hum={cc['humidity']}|"
-            f"cond={cc['weatherDesc'][0]['value']}|wind={cc['windspeedKmph']} km/h {cc['winddir16Point']}|"
-            f"press={cc['pressure']} hPa|precip={cc['precipMM']} mm|uv={cc['uvIndex']}|up={cc['observation_time']}|time={now_str}|loc={loc}"
+        # The complete snapshot includes coordinates and all three forecast days.
+        wx_line = "MERO:WX:" + "|".join(
+            protocol_value(key) + "=" + protocol_value(value)
+            for key, value in (line.split("=", 1) for line in content.splitlines())
         )
+        cached_weather_content = content
+        last_weather_fetch = now
         latest_weather_line = wx_line
-        send_stream(wx_line)
         print(f"[+] Weather updated: {loc} -> {cc['temp_C']}°C ({cc['weatherDesc'][0]['value']})")
         return content
 
@@ -496,74 +513,37 @@ def write_now_playing(sd_mount, media):
 # MAIN CONTINUOUS PROBING LOOP
 # ====================================================================
 def main():
-    global active_player, last_title, last_status, last_art_url
     sys.stdout.reconfigure(line_buffering=True)
-    print("=== MERO COMPANION DECK: CONTINUOUS PROBING DAEMON ===")
-    print("  [+] Strict YouTube Music Tracking (music.youtube.com)")
-    print("  [+] Cyberpunk Weather Matrix (Farroupilha, RS)")
-
-    sd_mount = find_sd_mount()
-    if sd_mount:
-        print(f"[+] SD card detected at: {sd_mount}")
-        sync_binaries(sd_mount)
-        fetch_weather(sd_mount)
-
-    poll_count = 0
-    while True:
-        try:
-            # 1. Mount maintenance
-            if poll_count % 20 == 0 or not sd_mount:
-                new_mount = find_sd_mount()
-                if new_mount != sd_mount:
-                    sd_mount = new_mount
-                    if sd_mount:
-                        print(f"[+] SD card mounted at: {sd_mount}")
-                        sync_binaries(sd_mount)
-                        fetch_weather(sd_mount)
-
-            # Check for updated binary every 5s
-            if poll_count % 10 == 0 and sd_mount:
-                sync_binaries(sd_mount)
-
-            # 2. Weather telemetry (every 10 minutes)
-            if poll_count % 1200 == 0:
-                fetch_weather(sd_mount)
-
-            # 3. Continuous player probing (every 500ms)
-            found_player = find_target_player()
-            if found_player != active_player:
-                active_player = found_player
-                if active_player:
-                    print(f"[+] Locked onto YouTube Music player: {active_player}")
-                else:
-                    print("[-] Waiting for YouTube Music (music.youtube.com)...")
-
-            # 4. Media status, live serial streaming, and storage sync
-            media = get_media_status(active_player)
-            if media:
-                if media["title"] != last_title or media["status"] != last_status:
-                    if media["title"] != last_title:
-                        last_art_url = ""
-                    last_title = media["title"]
-                    last_status = media["status"]
-                    print(f"[*] YouTube Music: {media['artist']} - {media['title']} [{media['status']}] ({media['position']}s / {media['length']}s)")
-
-                # Stream through TCP once ActiveSync PPP is established.
-                stream_now_playing(media)
-
-                # Storage sync when SD card is available (Mass Storage mode)
-                if sd_mount:
-                    update_artwork(media["art_url"], sd_mount, media.get("track_url", ""), media["title"])
-                    write_now_playing(sd_mount, media)
-
-            poll_count += 1
+    print("=== MERO COMPANION BRIDGE: WEATHER + CINEMA STANDBY ===")
+    # Network fetches must never block cinema wake or USB reconnect handling.
+    executor = ThreadPoolExecutor(max_workers=1)
+    future = None
+    next_fetch = 0.0
+    try:
+        while True:
+            now = time.monotonic()
+            if future is not None and future.done():
+                try:
+                    future.result()
+                except Exception as error:
+                    print(f"[!] Weather worker failed: {error}")
+                future = None
+                next_fetch = now + (WEATHER_INTERVAL if latest_weather_line and time.time() - last_weather_fetch < WEATHER_INTERVAL else 60)
+            if future is None and now >= next_fetch:
+                future = executor.submit(fetch_weather)
+            send_stream(f"MERO:POWER:standby={int(cinema_active())}")
+            if latest_weather_line:
+                age = int(max(0, time.time() - last_weather_fetch))
+                send_stream(latest_weather_line + f"|age={age}")
             time.sleep(0.5)
-
-        except KeyboardInterrupt:
-            print("\n[+] Daemon stopped cleanly.")
-            break
-        except Exception as e:
-            time.sleep(1.0)
+    except KeyboardInterrupt:
+        print("[+] Bridge stopped.")
+    finally:
+        for client in stream_clients:
+            client.close()
+        if stream_listener is not None:
+            stream_listener.close()
+        executor.shutdown(wait=True)
 
 
 if __name__ == "__main__":

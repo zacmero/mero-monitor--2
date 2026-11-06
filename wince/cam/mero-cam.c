@@ -12,11 +12,13 @@
  */
 
 #define WIN32_LEAN_AND_MEAN
+#include <winsock2.h>
 #include <windows.h>
 #include <tchar.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "../mero-live.h"
 
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_NO_STDIO
@@ -361,6 +363,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
     switch (msg)
     {
     case WM_CREATE:
+        MeroLiveInit(hWnd, NULL);
     {
         g_hWnd = hWnd;
         InitButtons();
@@ -380,6 +383,8 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
     }
 
     case WM_TIMER:
+        if (wParam == MERO_LIVE_TIMER) { MeroLiveTick(hWnd); return 0; }
+        if (mero_standby) return 0;
         if (wParam == TIMER_POLL)
             PollCamFrame();
         return 0;
@@ -464,6 +469,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
         return 0;
 
     case WM_DESTROY:
+        MeroLiveClose(hWnd);
         KillTimer(hWnd, TIMER_POLL);
         SendCamCommand("STOP");
         if (g_memDC) {

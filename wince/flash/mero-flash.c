@@ -22,16 +22,20 @@ int WINAPI WinMain(
 
     memset(&pi, 0, sizeof(pi));
 
-    /* If SDMMC is available, keep ResidentFlash updated */
-    if (GetFileAttributesW(L"\\SDMMC\\MERO\\mero-shell.exe") != 0xFFFFFFFF) {
-        CreateDirectoryW(L"\\ResidentFlash\\MERO", NULL);
-        SetFileAttributesW(L"\\ResidentFlash\\MERO\\mero-shell.exe", FILE_ATTRIBUTE_NORMAL);
-        CopyFileW(L"\\SDMMC\\MERO\\mero-shell.exe", L"\\ResidentFlash\\MERO\\mero-shell.exe", FALSE);
+    /* Allow the SD driver to mount after cold boot. Keep flash recovery untouched. */
+    {
+        int attempt;
+        for (attempt = 0; attempt < 10; attempt++) {
+            if (GetFileAttributesW(L"\\SDMMC\\MERO\\mero-shell.exe") != 0xFFFFFFFF) break;
+            Sleep(500);
+        }
     }
 
     /* Try SDMMC first (latest version), fallback to ResidentFlash */
     if (!CreateProcessW(L"\\SDMMC\\MERO\\mero-shell.exe", NULL, NULL, NULL, FALSE, 0, NULL, NULL, NULL, &pi)) {
         if (!CreateProcessW(L"\\ResidentFlash\\MERO\\mero-shell.exe", NULL, NULL, NULL, FALSE, 0, NULL, NULL, NULL, &pi)) {
+            if (!CreateProcessW(L"\\Windows\\Launch.exe", NULL, NULL, NULL, FALSE, 0, NULL, NULL, NULL, &pi) &&
+                !CreateProcessW(L"\\Windows\\explorer.exe", NULL, NULL, NULL, FALSE, 0, NULL, NULL, NULL, &pi))
             MessageBoxW(NULL,
                 L"Mero Shell not found.\nIf device is in USB Mass Storage mode, dismount USB or tap USB Storage Mode.",
                 L"Mero Launcher", MB_OK | MB_ICONWARNING);

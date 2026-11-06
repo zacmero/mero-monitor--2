@@ -5,11 +5,13 @@
  */
 
 #define WIN32_LEAN_AND_MEAN
+#include <winsock2.h>
 #include <windows.h>
 #include <tchar.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "../mero-live.h"
 #include <math.h>
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -17,6 +19,7 @@
 #define STBI_NO_SIMD
 #define STBI_NO_HDR
 #define STBI_NO_LINEAR
+#define STBI_MAX_DIMENSIONS 4096
 #define STBI_ONLY_JPEG
 #define STBI_ONLY_PNG
 #define STBI_ONLY_BMP
@@ -25,6 +28,7 @@
 #define GALLERY_VERSION        L"0.1.0"
 #define TIMER_ID_SLIDESHOW     1
 #define TIMER_ID_OSD_HIDE      2
+#define TIMER_ID_MOTION        3
 
 #define MAX_IMAGES             256
 #define MAX_FOLDERS            16
@@ -43,6 +47,7 @@ typedef struct {
 
 typedef enum {
     FIT_CONTAIN = 0,   /* Letterbox: entire image visible, black bars if needed */
+    FIT_AUTO    = 2,   /* Preserve extreme aspect ratios; fill normal photos */
     FIT_COVER   = 1    /* Fill: scales image to completely cover 480x272 without black bars */
 } FitMode;
 
@@ -81,7 +86,13 @@ static const int    g_intervalOptions[] = { 1, 2, 3, 5, 10, 30 };
 static const int    g_intervalOptionCount = 6;
 static int          g_intervalOptIdx = 2; /* Default 3s */
 
-static FitMode      g_fitMode = FIT_COVER;
+static FitMode      g_fitMode = FIT_AUTO;
+static WCHAR g_selectedFolder[MAX_PATH_LEN] = L"";
+static WCHAR g_loadedFolder[MAX_PATH_LEN] = L"";
+static int g_folderPage = 0;
+static unsigned char *g_pixels = NULL;
+static DWORD g_imageStarted = 0;
+static BOOL g_motion = TRUE;
 static OrientMode   g_orientMode = ORIENT_270;
 static BOOL         g_osdVisible = TRUE;
 static BOOL         g_folderDialogOpen = FALSE;
@@ -169,10 +180,11 @@ static void SaveGalleryConfig(void)
 {
     HANDLE hFile;
     DWORD written;
-    char buf[128];
+    char buf[768], folder[512];
 
-    sprintf(buf, "fit=%d\r\norient=%d\r\ninterval=%d\r\n",
-            (int)g_fitMode, (int)g_orientMode, g_intervalSec);
+    WideCharToMultiByte(CP_UTF8, 0, g_selectedFolder, -1, folder, sizeof(folder), NULL, NULL);
+    sprintf(buf, "fit=%d\r\norient=%d\r\ninterval=%d\r\nfolder=%s\r\n",
+            (int)g_fitMode, (int)g_orientMode, g_intervalSec, folder);
 
     CreateDirectoryW(L"\\SDMMC\\MERO", NULL);
     hFile = CreateFileW(L"\\SDMMC\\MERO\\gallery.cfg", GENERIC_WRITE, FILE_SHARE_READ, NULL,
@@ -182,16 +194,30 @@ static void SaveGalleryConfig(void)
         FlushFileBuffers(hFile);
         CloseHandle(hFile);
     }
+    if (g_folderCount > 0) {
+        WCHAR profile[MAX_PATH_LEN + 32];
+        wsprintfW(profile, L"%s\\mero-gallery.cfg", g_folders[g_currentFolderIdx].path);
+        sprintf(buf, "fit=%d\r\norient=%d\r\ninterval=%d\r\nmotion=%d\r\n",
+                (int)g_fitMode, (int)g_orientMode, g_intervalSec, g_motion);
+        hFile = CreateFileW(profile, GENERIC_WRITE, FILE_SHARE_READ, NULL,
+                           CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (hFile != INVALID_HANDLE_VALUE) {
+            WriteFile(hFile, buf, (DWORD)strlen(buf), &written, NULL);
+            FlushFileBuffers(hFile);
+            CloseHandle(hFile);
+        }
+    }
+
 }
 
 static void LoadGalleryConfig(void)
 {
     HANDLE hFile;
     DWORD bytesRead;
-    char buf[256];
+    char buf[768];
 
     /* Default requested: Fill screen at 270° orientation */
-    g_fitMode = FIT_COVER;
+    g_fitMode = FIT_AUTO;
     g_orientMode = ORIENT_270;
 
     hFile = CreateFileW(L"\\SDMMC\\MERO\\gallery.cfg", GENERIC_READ, FILE_SHARE_READ, NULL,
@@ -207,9 +233,11 @@ static void LoadGalleryConfig(void)
             while (line) {
                 int val = 0;
                 if (sscanf(line, "fit=%d", &val) == 1) {
-                    if (val == FIT_CONTAIN || val == FIT_COVER) g_fitMode = (FitMode)val;
+                    if (val >= FIT_CONTAIN && val <= FIT_AUTO) g_fitMode = (FitMode)val;
                 } else if (sscanf(line, "orient=%d", &val) == 1) {
                     if (val >= 0 && val < 4) g_orientMode = (OrientMode)val;
+                } else if (strncmp(line, "folder=", 7) == 0) {
+                    MultiByteToWideChar(CP_UTF8, 0, line + 7, -1, g_selectedFolder, MAX_PATH_LEN);
                 } else if (sscanf(line, "interval=%d", &val) == 1) {
                     if (val >= 1 && val <= 60) g_intervalSec = val;
                 }
@@ -223,6 +251,7 @@ static void LoadGalleryConfig(void)
 /* Forward declarations */
 static void ScanActiveFolder(void);
 static void LoadCurrentImage(void);
+static void RenderCurrentImage(void);
 static void DiscoverFolders(void);
 static void ResetOsdTimer(void);
 
@@ -269,7 +298,9 @@ static int CountImagesInDirectory(const WCHAR *dirPath)
 
 static void AddFolderIfValid(const WCHAR *path, const WCHAR *displayName)
 {
-    DWORD attr = GetFileAttributesW(path);
+    DWORD attr;
+    if (lstrlenW(path) >= MAX_PATH_LEN - 5) return;
+    attr = GetFileAttributesW(path);
     if (attr != 0xFFFFFFFF && (attr & FILE_ATTRIBUTE_DIRECTORY)) {
         int count = CountImagesInDirectory(path);
         if (g_folderCount < MAX_FOLDERS) {
@@ -314,11 +345,12 @@ static void DiscoverFolders(void)
                 _wcsicmp(wfd.cFileName, L"Suzy") != 0 &&
                 _wcsicmp(wfd.cFileName, L"Wallpapers") != 0) {
                 
+                if (lstrlenW(wfd.cFileName) >= MAX_PATH_LEN - 13) continue;
                 wsprintfW(subPath, L"\\SDMMC\\%s", wfd.cFileName);
                 int cnt = CountImagesInDirectory(subPath);
                 if (cnt > 0 && g_folderCount < MAX_FOLDERS) {
                     lstrcpynW(g_folders[g_folderCount].path, subPath, MAX_PATH_LEN);
-                    wsprintfW(g_folders[g_folderCount].name, L"SD: %s", wfd.cFileName);
+                    lstrcpynW(g_folders[g_folderCount].name, wfd.cFileName, 64);
                     g_folders[g_folderCount].imageCount = cnt;
                     g_folderCount++;
                 }
@@ -336,15 +368,62 @@ static void DiscoverFolders(void)
         g_folderCount = 1;
     }
 
-    /* Set first folder with images as active, or index 0 */
+    /* Restore selected folder before falling back to the first nonempty folder. */
     g_currentFolderIdx = 0;
     int i;
+    for (i = 0; i < g_folderCount; i++) {
+        if (_wcsicmp(g_folders[i].path, g_selectedFolder) == 0) {
+            g_currentFolderIdx = i;
+            return;
+        }
+    }
     for (i = 0; i < g_folderCount; i++) {
         if (g_folders[i].imageCount > 0) {
             g_currentFolderIdx = i;
             break;
         }
     }
+}
+
+static int CompareImages(const void *left, const void *right)
+{
+    return _wcsicmp(((const ImageFile *)left)->fileName, ((const ImageFile *)right)->fileName);
+}
+
+static void LoadFolderProfile(void)
+{
+    WCHAR path[MAX_PATH_LEN + 32];
+    HANDLE file;
+    char buf[256];
+    DWORD count;
+    int i;
+    lstrcpyW(g_selectedFolder, g_folders[g_currentFolderIdx].path);
+    if (_wcsicmp(g_loadedFolder, g_selectedFolder) == 0) return;
+    lstrcpyW(g_loadedFolder, g_selectedFolder);
+    g_fitMode = FIT_AUTO;
+    g_intervalSec = wcsstr(g_selectedFolder, L"Stream") ? 1 : 5;
+    g_motion = !wcsstr(g_selectedFolder, L"Stream");
+    wsprintfW(path, L"%s\\mero-gallery.cfg", g_selectedFolder);
+    file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    if (file != INVALID_HANDLE_VALUE) {
+        if (ReadFile(file, buf, sizeof(buf) - 1, &count, NULL)) {
+            char *line;
+            buf[count] = 0;
+            line = strtok(buf, "\r\n");
+            while (line) {
+                int val;
+                if (sscanf(line, "fit=%d", &val) == 1 && val >= 0 && val <= 2) g_fitMode = (FitMode)val;
+                else if (sscanf(line, "orient=%d", &val) == 1 && val >= 0 && val <= 3) g_orientMode = (OrientMode)val;
+                else if (sscanf(line, "interval=%d", &val) == 1 && val >= 1 && val <= 60) g_intervalSec = val;
+                else if (sscanf(line, "motion=%d", &val) == 1) g_motion = val != 0;
+                line = strtok(NULL, "\r\n");
+            }
+        }
+        CloseHandle(file);
+    }
+    for (i = 0; i < g_intervalOptionCount; i++)
+        if (g_intervalOptions[i] == g_intervalSec) g_intervalOptIdx = i;
+    if (g_hWnd && g_isPlaying) SetTimer(g_hWnd, TIMER_ID_SLIDESHOW, g_intervalSec * 1000, NULL);
 }
 
 /* Scan all image files in active folder */
@@ -359,6 +438,7 @@ static void ScanActiveFolder(void)
     g_hasImage = FALSE;
 
     if (g_folderCount == 0) return;
+    LoadFolderProfile();
 
     wsprintfW(pattern, L"%s\\*.*", g_folders[g_currentFolderIdx].path);
     hFind = FindFirstFileW(pattern, &wfd);
@@ -366,7 +446,8 @@ static void ScanActiveFolder(void)
         do {
             if (!(wfd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
                 if (HasImageExtension(wfd.cFileName)) {
-                    if (g_fileCount < MAX_IMAGES) {
+                    if (g_fileCount < MAX_IMAGES && lstrlenW(wfd.cFileName) < 64 &&
+                        lstrlenW(g_folders[g_currentFolderIdx].path) + lstrlenW(wfd.cFileName) + 2 < MAX_PATH_LEN) {
                         lstrcpynW(g_files[g_fileCount].fileName, wfd.cFileName, 64);
                         wsprintfW(g_files[g_fileCount].fullPath, L"%s\\%s",
                                   g_folders[g_currentFolderIdx].path, wfd.cFileName);
@@ -378,11 +459,13 @@ static void ScanActiveFolder(void)
         FindClose(hFind);
     }
 
+    qsort(g_files, g_fileCount, sizeof(ImageFile), CompareImages);
     g_folders[g_currentFolderIdx].imageCount = g_fileCount;
 
     if (g_fileCount > 0) {
         LoadCurrentImage();
     } else {
+        if (g_pixels) { stbi_image_free(g_pixels); g_pixels = NULL; }
         /* Clear display to black */
         if (g_pDIBBits) {
             memset(g_pDIBBits, 0, g_screenW * g_screenH * sizeof(DWORD));
@@ -403,6 +486,7 @@ static void LoadCurrentImage(void)
     int srcW = 0, srcH = 0, channels = 0;
     unsigned char *pixels = NULL;
 
+    if (g_pixels) { stbi_image_free(g_pixels); g_pixels = NULL; }
     if (g_fileCount == 0 || !g_pDIBBits) {
         g_hasImage = FALSE;
         return;
@@ -416,7 +500,7 @@ static void LoadCurrentImage(void)
     }
 
     fileSize = GetFileSize(hFile, NULL);
-    if (fileSize == 0 || fileSize > (16 * 1024 * 1024)) {
+    if (fileSize == 0 || fileSize > (8 * 1024 * 1024)) {
         CloseHandle(hFile);
         g_hasImage = FALSE;
         return;
@@ -437,6 +521,21 @@ static void LoadCurrentImage(void)
     }
     CloseHandle(hFile);
 
+    /* Bound decoded memory before allocation: this device has only 53 MB usable. */
+    {
+        MEMORYSTATUS memory;
+        memset(&memory, 0, sizeof(memory));
+        memory.dwLength = sizeof(memory);
+        GlobalMemoryStatus(&memory);
+        if (!stbi_info_from_memory(fileBuf, (int)fileSize, &srcW, &srcH, &channels) ||
+            srcW <= 0 || srcH <= 0 || (double)srcW * srcH > 3000000.0 ||
+            (double)srcW * srcH * 4 + 8 * 1024 * 1024 > memory.dwAvailPhys) {
+            free(fileBuf);
+            g_hasImage = FALSE;
+            return;
+        }
+    }
+
     /* Decode JPEG/PNG/BMP directly into uncompressed 32bpp RGBA memory */
     pixels = stbi_load_from_memory(fileBuf, (int)fileSize, &srcW, &srcH, &channels, 4);
     free(fileBuf);
@@ -450,6 +549,18 @@ static void LoadCurrentImage(void)
     g_imgOriginalW = srcW;
     g_imgOriginalH = srcH;
 
+    g_pixels = pixels;
+    g_hasImage = TRUE;
+    g_imageStarted = GetTickCount();
+    RenderCurrentImage();
+}
+
+static void RenderCurrentImage(void)
+{
+    int srcW = g_imgOriginalW, srcH = g_imgOriginalH;
+    unsigned char *pixels = g_pixels;
+    if (!pixels || !g_pDIBBits) return;
+
     /* Clear display buffer with solid black */
     memset(g_pDIBBits, 0, g_screenW * g_screenH * sizeof(DWORD));
 
@@ -461,7 +572,9 @@ static void LoadCurrentImage(void)
     float cropEffX = 0.0f, cropEffY = 0.0f;
     float cropEffW = (float)effW, cropEffH = (float)effH;
 
-    if (g_fitMode == FIT_COVER) {
+    float ratio = ((float)effW / effH) / ((float)g_screenW / g_screenH);
+    BOOL cover = g_fitMode == FIT_COVER || (g_fitMode == FIT_AUTO && ratio > 0.67f && ratio < 1.5f);
+    if (cover) {
         /* FILL: Cover entire 480x272 screen completely with zero black bars */
         float sW = (float)g_screenW / (float)effW;
         float sH = (float)g_screenH / (float)effH;
@@ -476,6 +589,15 @@ static void LoadCurrentImage(void)
         cropEffH = (float)g_screenH / s;
         cropEffX = ((float)effW - cropEffW) / 2.0f;
         cropEffY = ((float)effH - cropEffH) / 2.0f;
+        if (g_motion && g_isPlaying && g_intervalSec >= 3) {
+            float progress = (float)(DWORD)(GetTickCount() - g_imageStarted) / (g_intervalSec * 1000.0f);
+            float pan;
+            if (progress > 1.0f) progress = 1.0f;
+            pan = 0.25f + progress * 0.50f;
+            if (g_currentFileIdx & 1) pan = 1.0f - pan;
+            cropEffX = ((float)effW - cropEffW) * pan;
+            cropEffY = ((float)effH - cropEffH) * pan;
+        }
     } else {
         /* FIT: Contain within 480x272, preserving aspect ratio with letterbox */
         float sW = (float)g_screenW / (float)effW;
@@ -555,7 +677,6 @@ static void LoadCurrentImage(void)
         }
     }
 
-    stbi_image_free(pixels);
     g_hasImage = TRUE;
 
     if (g_hWnd) {
@@ -598,13 +719,14 @@ static void CycleInterval(void)
     if (g_isPlaying) {
         SetTimer(g_hWnd, TIMER_ID_SLIDESHOW, g_intervalSec * 1000, NULL);
     }
+    SaveGalleryConfig();
     ResetOsdTimer();
     InvalidateRect(g_hWnd, NULL, FALSE);
 }
 
 static void CycleFitMode(void)
 {
-    g_fitMode = (g_fitMode == FIT_CONTAIN) ? FIT_COVER : FIT_CONTAIN;
+    g_fitMode = (FitMode)(((int)g_fitMode + 1) % 3);
     SaveGalleryConfig();
     LoadCurrentImage();
     ResetOsdTimer();
@@ -673,7 +795,7 @@ static void OnPaint(HWND hWnd)
     /* 2. Empty state rendering */
     if (!g_hasImage) {
         SetTextColor(backDC, RGB(255, 80, 80));
-        wsprintfW(buf, L"NO IMAGES IN %s", g_folders[g_currentFolderIdx].name);
+        wsprintfW(buf, g_fileCount ? L"IMAGE UNREADABLE OR TOO LARGE" : L"NO IMAGES IN %s", g_folders[g_currentFolderIdx].name);
         ExtTextOutW(backDC, 20, 80, 0, NULL, buf, lstrlenW(buf), NULL);
 
         SetTextColor(backDC, RGB(180, 200, 190));
@@ -718,7 +840,7 @@ static void OnPaint(HWND hWnd)
             const WCHAR *orientLabels[] = { L"0 DEG", L"90 DEG", L"180 DEG", L"270 DEG" };
             wsprintfW(buf, L"%s | %s | %s | %s",
                       g_isPlaying ? L"[PLAY]" : L"[PAUSED]",
-                      g_fitMode == FIT_CONTAIN ? L"FIT" : L"FILL",
+                      g_fitMode == FIT_AUTO ? L"AUTO" : g_fitMode == FIT_CONTAIN ? L"FIT" : L"FILL",
                       orientLabels[g_orientMode],
                       g_folders[g_currentFolderIdx].name);
         }
@@ -755,7 +877,7 @@ static void OnPaint(HWND hWnd)
         wsprintfW(buf, L"%ds TIME", g_intervalSec);
         DRAW_BTN(g_rcBtnInterval, buf,               RGB(255, 180, 0));
 
-        DRAW_BTN(g_rcBtnFit,      g_fitMode == FIT_CONTAIN ? L"FIT" : L"FILL", RGB(180, 140, 255));
+        DRAW_BTN(g_rcBtnFit,      g_fitMode == FIT_AUTO ? L"AUTO" : g_fitMode == FIT_CONTAIN ? L"FIT" : L"FILL", RGB(180, 140, 255));
         {
             const WCHAR *orientBtnLabels[] = { L"0 DEG", L"90 DEG", L"180 DEG", L"270 DEG" };
             DRAW_BTN(g_rcBtnOrient, orientBtnLabels[g_orientMode], RGB(0, 255, 200));
@@ -786,8 +908,9 @@ static void OnPaint(HWND hWnd)
 
         int i;
         int y = 48;
-        int maxShown = g_folderCount < 5 ? g_folderCount : 5;
-        for (i = 0; i < maxShown; i++) {
+        int first = g_folderPage * 5;
+        int last = first + 5 < g_folderCount ? first + 5 : g_folderCount;
+        for (i = first; i < last; i++) {
             RECT rcItem = { 35, y, g_screenW - 35, y + 30 };
             COLORREF col = (i == g_currentFolderIdx) ? RGB(0, 255, 128) : RGB(140, 180, 220);
 
@@ -802,6 +925,10 @@ static void OnPaint(HWND hWnd)
             ExtTextOutW(backDC, rcItem.left + 8, rcItem.top + 7, 0, NULL, buf, lstrlenW(buf), NULL);
             y += 34;
         }
+
+        SetTextColor(backDC, RGB(0, 220, 255));
+        wsprintfW(buf, L"< PREV  %d/%d  NEXT >", g_folderPage + 1, (g_folderCount + 4) / 5);
+        ExtTextOutW(backDC, 35, 207, 0, NULL, buf, lstrlenW(buf), NULL);
 
         /* Cancel button at bottom */
         RECT rcCancel = { 180, 220, 300, 250 };
@@ -831,6 +958,12 @@ static void OnTouch(int x, int y)
 
     /* Handle Folder Chooser interaction */
     if (g_folderDialogOpen) {
+        if (y >= 200 && y < 220) {
+            if (x < 180 && g_folderPage > 0) g_folderPage--;
+            else if (x >= 180 && (g_folderPage + 1) * 5 < g_folderCount) g_folderPage++;
+            InvalidateRect(g_hWnd, NULL, FALSE);
+            return;
+        }
         /* Cancel button */
         RECT rcCancel = { 180, 220, 300, 250 };
         if (PtInRect(&rcCancel, pt)) {
@@ -842,13 +975,15 @@ static void OnTouch(int x, int y)
         /* Folder list items */
         int i;
         int itemY = 48;
-        int maxShown = g_folderCount < 5 ? g_folderCount : 5;
-        for (i = 0; i < maxShown; i++) {
+        int first = g_folderPage * 5;
+        int last = first + 5 < g_folderCount ? first + 5 : g_folderCount;
+        for (i = first; i < last; i++) {
             RECT rcItem = { 35, itemY, g_screenW - 35, itemY + 30 };
             if (PtInRect(&rcItem, pt)) {
                 g_currentFolderIdx = i;
                 g_folderDialogOpen = FALSE;
                 ScanActiveFolder();
+                SaveGalleryConfig();
                 ResetOsdTimer();
                 return;
             }
@@ -885,6 +1020,7 @@ static void OnTouch(int x, int y)
         }
         if (PtInRect(&g_rcBtnFolder, pt)) {
             DiscoverFolders();
+            g_folderPage = g_currentFolderIdx / 5;
             g_folderDialogOpen = TRUE;
             InvalidateRect(g_hWnd, NULL, FALSE);
             return;
@@ -937,6 +1073,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
 {
     switch (uMsg) {
     case WM_CREATE:
+        MeroLiveInit(hWnd, NULL);
         g_hWnd = hWnd;
         InitButtonRects();
 
@@ -967,11 +1104,17 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         if (g_isPlaying) {
             SetTimer(hWnd, TIMER_ID_SLIDESHOW, g_intervalSec * 1000, NULL);
         }
+        SetTimer(hWnd, TIMER_ID_MOTION, 250, NULL);
         ResetOsdTimer();
         return 0;
 
     case WM_TIMER:
-        if (wParam == TIMER_ID_SLIDESHOW) {
+        if (wParam == MERO_LIVE_TIMER) { MeroLiveTick(hWnd); return 0; }
+        if (mero_standby) return 0;
+        if (wParam == TIMER_ID_MOTION) {
+            if (g_isPlaying && g_motion && !g_folderDialogOpen && g_hasImage && g_intervalSec >= 3)
+                if (g_fitMode != FIT_CONTAIN) RenderCurrentImage();
+        } else if (wParam == TIMER_ID_SLIDESHOW) {
             if (g_isPlaying && !g_folderDialogOpen) {
                 if (g_fileCount > 0) {
                     int prevIdx = g_currentFileIdx;
@@ -1008,6 +1151,9 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         return 0;
 
     case WM_DESTROY:
+        MeroLiveClose(hWnd);
+        KillTimer(hWnd, TIMER_ID_MOTION);
+        if (g_pixels) { stbi_image_free(g_pixels); g_pixels = NULL; }
         KillTimer(hWnd, TIMER_ID_SLIDESHOW);
         KillTimer(hWnd, TIMER_ID_OSD_HIDE);
         if (g_memDC && g_hOldBmp) {

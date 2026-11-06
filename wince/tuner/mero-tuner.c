@@ -6,11 +6,13 @@
  */
 
 #define WIN32_LEAN_AND_MEAN
+#include <winsock2.h>
 #include <windows.h>
 #include <tchar.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "../mero-live.h"
 #include <math.h>
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -601,6 +603,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
 {
     switch (uMsg) {
     case WM_CREATE:
+        MeroLiveInit(hWnd, NULL);
         g_hWnd = hWnd;
 
         /* Decode Suzy Mero Steele sample preview from embedded memory */
@@ -636,6 +639,10 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         LoadConfig();
         return 0;
 
+    case WM_TIMER:
+        if (wParam == MERO_LIVE_TIMER) MeroLiveTick(hWnd);
+        return 0;
+
     case WM_ERASEBKGND:
         return 1;
 
@@ -648,6 +655,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         return 0;
 
     case WM_DESTROY:
+        MeroLiveClose(hWnd);
         if (g_prevDC && g_hOldPrev) SelectObject(g_prevDC, g_hOldPrev);
         if (g_hPrevBmp) DeleteObject(g_hPrevBmp);
         if (g_prevDC) DeleteDC(g_prevDC);

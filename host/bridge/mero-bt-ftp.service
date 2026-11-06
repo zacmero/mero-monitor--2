@@ -1,0 +1,12 @@
+[Unit]
+Description=Mero Foston Bluetooth FTP staging folder
+After=dbus.service
+
+[Service]
+Environment=LD_LIBRARY_PATH=%h/.local/share/mero/obex-compat/lib/x86_64-linux-gnu
+ExecStart=%h/.local/share/mero/obex-compat/usr/libexec/bluetooth/obexd --nodetach --plugin=ftp,bluetooth,filesystem --root=%h/.local/share/mero-foston-bluetooth
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

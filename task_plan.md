@@ -1,5 +1,18 @@
 # ActiveSync media synchronization
 
+## Current task: Foston repair (2026-09-29)
+- [x] Inspect current source, USB detection, and ArchMerOS cinema behavior.
+- [x] Restore safe live sync independent of obsolete music playback; integrate cinema standby.
+- [x] Fix gallery folder selection, paging, persistence, and adaptive presentation.
+- [x] Repair terminal weather and PCM visualization; preserve GPS and FM features safely.
+- [x] Build ARM binaries, run focused checks, document recovery and useful follow-ups.
+- [ ] Deploy and test on hardware when USB is visible. Currently no 045e device or ttyUSB port.
+
+Transport installation also awaits administrator access (sudo -n requires a password).
+Host bridge is enabled with user lingering and running the updated code. Device electrical power-on and actual panel standby remain unverified. See docs/REPAIR.md for the physical acceptance checks.
+
+Prior plan below is historical; its claimed TCP receiver no longer exists in current terminal source.
+
 ## Goal
 Stream YouTube Music state from the Linux bridge to `mero-media-ctrl.exe` reliably over ActiveSync PPP/TCP, using Mass Storage only to deploy the built executable.
 
@@ -25,3 +38,10 @@ Stream YouTube Music state from the Linux bridge to `mero-media-ctrl.exe` reliab
 |---|---:|---|
 | Web search tool failed to decode responses during diagnosis | 1 | Used repository documentation and live hardware state. |
 | First dead-code removal patch did not match the previously reformatted C source | 1 | Left the unreachable legacy function in place; the active timer path uses only TCP. |
+
+### 2026-11-05 Bluetooth milestone
+- [x] Bootstrap native executable over Bluetooth without USB mount.
+- [x] Run native client through navigation path.
+- [x] Verify custom client list and download with user.
+- [x] Verify upload byte for byte on PC.
+- Publishing authorized by user; commit and push outcome recorded in Git history.

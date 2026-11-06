@@ -5,14 +5,16 @@
  */
 
 #define WIN32_LEAN_AND_MEAN
+#include <winsock2.h>
 #include <windows.h>
 #include <tlhelp32.h>
 #include <mmsystem.h>
 #include <tchar.h>
 #include <stdio.h>
 #include <string.h>
+#include "../mero-live.h"
 
-#define SHELL_VERSION       L"0.2.6"
+#define SHELL_VERSION       L"0.2.12"
 #define TIMER_ID_TICK       1
 
 #define IOCTL_HAL_REBOOT    0x0001003C
@@ -30,6 +32,7 @@ extern BOOL WINAPI SetCleanRebootFlag(void);
 #define PATH_GALLERY        L"\\SDMMC\\MERO\\mero-gallery.exe"
 #define PATH_MEDIA_CTRL     L"\\SDMMC\\MERO\\mero-media-ctrl.exe"
 #define PATH_TUNER          L"\\SDMMC\\MERO\\mero-tuner.exe"
+#define PATH_BT             L"\\SDMMC\\MERO\\mero-bt.exe"
 #define PATH_CAM            L"\\SDMMC\\MERO\\mero-cam.exe"
 #define PATH_VIS            L"\\SDMMC\\MERO\\mero-vis.exe"
 #define PATH_TERMINAL       L"\\SDMMC\\MERO\\mero-terminal.exe"
@@ -106,7 +109,8 @@ typedef enum {
     PAGE_COMPANIONS  = 1,  /* Custom Companion Apps Suite */
     PAGE_SYSTEM      = 2,  /* System & Hardware Tools */
     PAGE_ADVANCED    = 3,  /* Low-level & Diagnostic Tools */
-    PAGE_COUNT       = 4
+    PAGE_BLUETOOTH   = 4,
+    PAGE_COUNT       = 5
 } ShellPage;
 
 static ShellPage      g_currentPage = PAGE_MAIN;
@@ -283,17 +287,10 @@ static int KillVendorWatchdog(void)
         ShowWindow(hWndDog, SW_HIDE);
         EnableWindow(hWndDog, FALSE);
     }
-    HWND hWndPhone = FindWindowW(NULL, L"ANW_PHONELINK");
-    if (hWndPhone) {
-        ShowWindow(hWndPhone, SW_HIDE);
-        EnableWindow(hWndPhone, FALSE);
-    }
     HWND hWndComm = FindWindowW(NULL, L"Cannot start communications with the desktop computer.");
     if (hWndComm) PostMessageW(hWndComm, WM_CLOSE, 0, 0);
     HWND hWndComm2 = FindWindowW(NULL, L"Communications Error");
     if (hWndComm2) PostMessageW(hWndComm2, WM_CLOSE, 0, 0);
-    HWND hWndRepl = FindWindowW(NULL, L"Repllog");
-    if (hWndRepl) PostMessageW(hWndRepl, WM_CLOSE, 0, 0);
 
     hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (hSnap != INVALID_HANDLE_VALUE) {
@@ -301,12 +298,9 @@ static int KillVendorWatchdog(void)
         if (Process32First(hSnap, &pe)) {
             do {
                 if (_wcsicmp(pe.szExeFile, L"ANWDOG.exe") == 0 ||
-                    _wcsicmp(pe.szExeFile, L"PhoneLink.exe") == 0 ||
                     _wcsicmp(pe.szExeFile, L"Launch.exe") == 0 ||
                     _wcsicmp(pe.szExeFile, L"Main.exe") == 0 ||
-                    _wcsicmp(pe.szExeFile, L"YFMenu.exe") == 0 ||
-                    _wcsicmp(pe.szExeFile, L"repllog.exe") == 0 ||
-                    _wcsicmp(pe.szExeFile, L"rnaapp.exe") == 0) {
+                    _wcsicmp(pe.szExeFile, L"YFMenu.exe") == 0) {
                     
                     HANDLE hProc = OpenProcess(0x0001 /* PROCESS_TERMINATE */, FALSE, pe.th32ProcessID);
                     if (hProc) {
@@ -363,16 +357,13 @@ static void CreateDesktopShortcuts(void)
     const char *lnkTuner   = "26#\\SDMMC\\MERO\\mero-tuner.exe";
     const char *lnkMedia   = "31#\\SDMMC\\MERO\\mero-media-ctrl.exe";
 
-    SyncToResidentFlash();
+    /* Preserve the existing internal recovery copy. */
 
     CreateDirectoryW(L"\\Windows\\Desktop", NULL);
 
     /* Delete old/stale shortcuts that might be on desktop */
-    DeleteFileW(L"\\Windows\\Desktop\\Resident Shell.lnk");
     DeleteFileW(L"\\Windows\\Desktop\\YT Music Deck.lnk");
     DeleteFileW(L"\\Windows\\Desktop\\YouTube Music Deck.lnk");
-    DeleteFileW(L"\\Windows\\Desktop\\Media Visualizer.lnk");
-    DeleteFileW(L"\\Windows\\Desktop\\Display Tuner.lnk");
 
     hFile = CreateFileW(L"\\Windows\\Desktop\\Mero Shell.lnk", GENERIC_WRITE, FILE_SHARE_READ,
                         NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -503,12 +494,10 @@ static BOOL ApplyBootTarget(BootTarget target)
     const WCHAR *launchPath = NULL;
     BOOL ok = FALSE;
 
-    g_bootTarget = target;
-
     switch (target) {
     case BOOT_FLASH:
         CreateDirectoryW(L"\\ResidentFlash\\MERO", NULL);
-        CopyFileW(L"\\SDMMC\\MERO\\mero-shell.exe", L"\\ResidentFlash\\MERO\\mero-shell.exe", FALSE);
+        if (!CopyFileW(L"\\SDMMC\\MERO\\mero-shell.exe", L"\\ResidentFlash\\MERO\\mero-shell.exe", FALSE)) return FALSE;
         CopyFileW(L"\\SDMMC\\MERO\\mero-cmd.exe", L"\\ResidentFlash\\MERO\\mero-cmd.exe", FALSE);
         CopyFileW(L"\\SDMMC\\MERO\\mero-flash.exe", L"\\ResidentFlash\\MERO\\mero-flash.exe", FALSE);
         CopyFileW(L"\\SDMMC\\MERO\\mero-shell.ico", L"\\ResidentFlash\\MERO\\mero-shell.ico", FALSE);
@@ -528,6 +517,8 @@ static BOOL ApplyBootTarget(BootTarget target)
         break;
     }
 
+    if ((target == BOOT_FLASH || target == BOOT_SDMMC) && GetFileAttributesW(launchPath) == 0xFFFFFFFF) return FALSE;
+
     if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"init", 0, 0, &hKey) == ERROR_SUCCESS) {
         DWORD len = (lstrlenW(launchPath) + 1) * sizeof(WCHAR);
         if (RegSetValueExW(hKey, L"Launch50", 0, REG_SZ, (const BYTE*)launchPath, len) == ERROR_SUCCESS) {
@@ -537,8 +528,10 @@ static BOOL ApplyBootTarget(BootTarget target)
         RegCloseKey(hKey);
     }
 
+    if (ok) g_bootTarget = target;
+
     /* Registry persistence verification canary */
-    if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, L"Software\\Mero", 0, NULL, 0, 0, NULL, &hKey, NULL) == ERROR_SUCCESS) {
+    if (ok && RegCreateKeyExW(HKEY_LOCAL_MACHINE, L"Software\\Mero", 0, NULL, 0, 0, NULL, &hKey, NULL) == ERROR_SUCCESS) {
         DWORD flag = (DWORD)target + 100;
         RegSetValueExW(hKey, L"BootConfig", 0, REG_DWORD, (const BYTE*)&flag, sizeof(DWORD));
         RegFlushKey(HKEY_LOCAL_MACHINE);
@@ -929,6 +922,19 @@ static void DumpLaunchStrings(void)
 }
 
 /* Update button text & colors based on current page */
+typedef int (WINAPI *MeroBthGetMode)(DWORD *);
+typedef int (WINAPI *MeroBthSetMode)(DWORD);
+static HMODULE g_bthModule;
+static MeroBthGetMode g_bthGet;
+static MeroBthSetMode g_bthSet;
+static DWORD g_bthMode;
+static BOOL g_bthKnown;
+
+static void BluetoothInspect(void);
+static void BluetoothRefresh(void);
+static void BluetoothSet(DWORD mode);
+static void BluetoothPairing(void);
+
 static void UpdateButtons(void)
 {
     int colW = 215;
@@ -952,7 +958,7 @@ static void UpdateButtons(void)
     case PAGE_MAIN:
         /* PAGE 0: Mero OS Core Hub */
         lstrcpyW(g_buttons[0].title, L"[1] COMPANION LABS >>");
-        lstrcpyW(g_buttons[0].sub,   L"Gallery, YT Music, Tuner, Cam, VU");
+        lstrcpyW(g_buttons[0].sub,   L"Gallery, Sensors, Tuner, Cam, VU");
         g_buttons[0].color = RGB(0, 255, 128);
 
         lstrcpyW(g_buttons[1].title, L"[2] MERO CMD SHELL");
@@ -983,7 +989,7 @@ static void UpdateButtons(void)
         g_buttons[0].color = RGB(0, 255, 128);
 
         lstrcpyW(g_buttons[1].title, L"mero-media-ctrl.exe");
-        lstrcpyW(g_buttons[1].sub,   L"[2] now playing deck + controls");
+        lstrcpyW(g_buttons[1].sub,   L"[2] clock, weather, GPS + FM");
         g_buttons[1].color = RGB(0, 200, 255);
 
         lstrcpyW(g_buttons[2].title, L"mero-tuner.exe");
@@ -1017,8 +1023,8 @@ static void UpdateButtons(void)
         lstrcpyW(g_buttons[2].sub,   L"Original Factory Navigation UI");
         g_buttons[2].color = RGB(255, 200, 40);
 
-        lstrcpyW(g_buttons[3].title, L"[4] DISPLAY TUNER");
-        lstrcpyW(g_buttons[3].sub,   L"Contrast, Brightness, Gamma");
+        lstrcpyW(g_buttons[3].title, L"[4] BLUETOOTH >>");
+        lstrcpyW(g_buttons[3].sub,   L"Radio, visibility, pairing, status");
         g_buttons[3].color = RGB(255, 140, 40);
 
         lstrcpyW(g_buttons[4].title, L"[5] ADVANCED TOOLS >>");
@@ -1030,11 +1036,27 @@ static void UpdateButtons(void)
         g_buttons[5].color = RGB(160, 160, 160);
         break;
 
+    case PAGE_BLUETOOTH:
+        lstrcpyW(g_buttons[0].title, L"[1] BLUETOOTH FILES >>");
+        lstrcpyW(g_buttons[0].sub, L"Connect, list, download, upload test");
+        lstrcpyW(g_buttons[1].title, L"[2] OEM RADIO ON");
+        lstrcpyW(g_buttons[1].sub, L"Request power through actual backend");
+        lstrcpyW(g_buttons[2].title, L"[3] OEM RADIO OFF");
+        lstrcpyW(g_buttons[2].sub, L"Disconnect Bluetooth via OEM backend");
+        lstrcpyW(g_buttons[3].title, L"[4] BACKEND STATUS");
+        lstrcpyW(g_buttons[3].sub, L"Check installed backend process");
+        lstrcpyW(g_buttons[4].title, L"[5] EXPORT VENDOR FILES");
+        lstrcpyW(g_buttons[4].sub, L"Capture actual app / DLLs to SD");
+        lstrcpyW(g_buttons[5].title, L"[6] << BACK TO TOOLS");
+        lstrcpyW(g_buttons[5].sub, L"System and advanced controls");
+        { int b; for (b = 0; b < 6; b++) g_buttons[b].color = RGB(100, 190, 255); }
+        break;
+
     case PAGE_ADVANCED:
     default:
         /* PAGE 3: Advanced Diagnostics & Subsystem Tools */
         lstrcpyW(g_buttons[0].title, L"[1] KILL VENDOR DOG");
-        lstrcpyW(g_buttons[0].sub,   L"Terminate ANWDOG & PhoneLink");
+        lstrcpyW(g_buttons[0].sub,   L"Stop watchdog / launcher");
         g_buttons[0].color = RGB(255, 80, 80);
 
         lstrcpyW(g_buttons[1].title, L"[2] HARDWARE DUMP");
@@ -1065,6 +1087,316 @@ static void UpdateButtons(void)
 }
 
 /* Paint Custom Mero Shell (Double Buffered - Zero Blinking) */
+
+static void BluetoothRefresh(void)
+{
+    if (!g_bthModule) {
+        g_bthModule = LoadLibraryW(L"bthutil.dll");
+        if (g_bthModule) {
+            g_bthGet = (MeroBthGetMode)GetProcAddress(g_bthModule, L"BthGetMode");
+            g_bthSet = (MeroBthSetMode)GetProcAddress(g_bthModule, L"BthSetMode");
+        }
+    }
+    g_bthKnown = g_bthGet && g_bthGet(&g_bthMode) == 0 && g_bthMode <= 2;
+    if (!g_bthKnown) lstrcpyW(g_statusMsg, L"OEM Bluetooth API unavailable; use pairing panel");
+    else wsprintfW(g_statusMsg, L"Bluetooth: %s", g_bthMode == 0 ? L"OFF" :
+                   g_bthMode == 1 ? L"ON / hidden" : L"ON / discoverable");
+}
+
+static void BluetoothSet(DWORD mode)
+{
+    BluetoothRefresh();
+    if (!g_bthKnown || !g_bthSet) {
+        lstrcpyW(g_statusMsg, L"Radio control unsupported by this OEM stack");
+        return;
+    }
+    int result = g_bthSet(mode);
+    BluetoothRefresh();
+    if (result || !g_bthKnown || g_bthMode != mode)
+        wsprintfW(g_statusMsg, L"Bluetooth change not confirmed (error %d)", result);
+}
+
+
+
+static void BluetoothEvidenceLine(HANDLE log, const char *line)
+{
+    DWORD written;
+    WriteFile(log, line, (DWORD)strlen(line), &written, NULL);
+}
+
+/* Copy the readable file stream, without trying to reproduce ROM attributes. */
+static void BluetoothCaptureFile(HANDLE log, const WCHAR *source, const WCHAR *dest,
+                                 DWORD *budget)
+{
+    HANDLE input, output;
+    DWORD size, high, got, written, total = 0, error = 0;
+    BYTE buffer[4096];
+    char line[640];
+    input = CreateFileW(source, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                        NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (input == INVALID_HANDLE_VALUE) { error = GetLastError(); goto report; }
+    size = GetFileSize(input, &high);
+    if (high || size == INVALID_FILE_SIZE || size > *budget) {
+        error = ERROR_DISK_FULL; CloseHandle(input); goto report;
+    }
+    output = CreateFileW(dest, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (output == INVALID_HANDLE_VALUE) { error = GetLastError(); CloseHandle(input); goto report; }
+    *budget -= size;
+    while (total < size) {
+        DWORD want = size - total;
+        if (want > sizeof(buffer)) want = sizeof(buffer);
+        if (!ReadFile(input, buffer, want, &got, NULL)) { error = GetLastError(); break; }
+        if (!got) { error = ERROR_HANDLE_EOF; break; }
+        if (!WriteFile(output, buffer, got, &written, NULL)) { error = GetLastError(); break; }
+        if (written != got) { error = ERROR_WRITE_FAULT; break; }
+        total += written;
+    }
+    if (!FlushFileBuffers(output) && !error) error = GetLastError();
+    CloseHandle(output);
+    CloseHandle(input);
+report:
+    snprintf(line, sizeof(line), "Capture %ls -> %ls bytes=%lu error=%lu\r\n", source, dest, total, error);
+    BluetoothEvidenceLine(log, line);
+}
+
+static void BluetoothCaptureTree(HANDLE log, const WCHAR *source, const WCHAR *dest,
+                                 DWORD *budget, int depth)
+{
+    WIN32_FIND_DATAW fd;
+    HANDLE find;
+    WCHAR pattern[260], path[260], target[260];
+    char line[640];
+    if (depth > 4 || wcslen(source) > 180 || wcslen(dest) > 180) return;
+    CreateDirectoryW(dest, NULL);
+    wsprintfW(pattern, L"%s\\*", source);
+    find = FindFirstFileW(pattern, &fd);
+    if (find == INVALID_HANDLE_VALUE) {
+        snprintf(line, sizeof(line), "Directory %ls unavailable error=%lu\r\n", source, GetLastError());
+        BluetoothEvidenceLine(log, line); return;
+    }
+    do {
+        const WCHAR *ext;
+        if (!wcscmp(fd.cFileName, L".") || !wcscmp(fd.cFileName, L"..")) continue;
+        if (wcslen(fd.cFileName) > 70) continue;
+        wsprintfW(path, L"%s\\%s", source, fd.cFileName);
+        wsprintfW(target, L"%s\\%s", dest, fd.cFileName);
+        snprintf(line, sizeof(line), "OEM file %ls size=%lu attributes=%08lx\r\n",
+                 path, fd.nFileSizeLow, fd.dwFileAttributes);
+        BluetoothEvidenceLine(log, line);
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            BluetoothCaptureTree(log, path, target, budget, depth + 1);
+        } else {
+            ext = wcsrchr(fd.cFileName, L'.');
+            if (ext && (!_wcsicmp(ext, L".exe") || !_wcsicmp(ext, L".dll")))
+                BluetoothCaptureFile(log, path, target, budget);
+        }
+    } while (FindNextFileW(find, &fd));
+    FindClose(find);
+}
+
+static void BluetoothCaptureVendor(void)
+{
+    const WCHAR *dlls[] = { L"btdrt.dll", L"hciext.dll", L"mtk_bthuart.dll",
+                            L"btsvc.dll", L"btd.dll", L"bthuniv.dll", L"bta2dp.dll" };
+    WCHAR root[128], path[260], dest[260];
+    HANDLE log, snap;
+    DWORD budget = 32 * 1024 * 1024;
+    ULARGE_INTEGER available;
+    unsigned int i;
+    char line[640];
+    if (!GetDiskFreeSpaceExW(CFG_DIR, &available, NULL, NULL) ||
+        available.QuadPart < 4 * 1024 * 1024) {
+        lstrcpyW(g_statusMsg, L"Export needs mounted SD and at least 4 MB free"); return;
+    }
+    if (available.QuadPart < budget + 1024 * 1024)
+        budget = (DWORD)(available.QuadPart - 1024 * 1024);
+    wsprintfW(root, L"\\SDMMC\\MERO\\oem-bt-%lu", GetTickCount());
+    CreateDirectoryW(root, NULL);
+    wsprintfW(path, L"%s\\vendor-inventory.txt", root);
+    log = CreateFileW(path, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (log == INVALID_HANDLE_VALUE) { lstrcpyW(g_statusMsg, L"Cannot create OEM capture"); return; }
+    BluetoothEvidenceLine(log, "OEM Bluetooth capture v2: file reads only; no controller commands\r\n");
+    snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap != INVALID_HANDLE_VALUE) {
+        PROCESSENTRY32 pe; pe.dwSize = sizeof(pe);
+        if (Process32First(snap, &pe)) do {
+            snprintf(line, sizeof(line), "Process %lu %ls\r\n", pe.th32ProcessID, pe.szExeFile);
+            BluetoothEvidenceLine(log, line);
+        } while (Process32Next(snap, &pe));
+        CloseHandle(snap);
+    }
+    wsprintfW(dest, L"%s\\ResidentFlash2", root);
+    BluetoothCaptureTree(log, L"\\ResidentFlash2", dest, &budget, 0);
+    wsprintfW(dest, L"%s\\ResidentFlash", root);
+    BluetoothCaptureTree(log, L"\\ResidentFlash", dest, &budget, 0);
+    wsprintfW(dest, L"%s\\Windows", root); CreateDirectoryW(dest, NULL);
+    for (i = 0; i < sizeof(dlls)/sizeof(dlls[0]); i++) {
+        wsprintfW(path, L"\\Windows\\%s", dlls[i]);
+        wsprintfW(dest, L"%s\\Windows\\%s", root, dlls[i]);
+        BluetoothCaptureFile(log, path, dest, &budget);
+    }
+    FlushFileBuffers(log); CloseHandle(log);
+    lstrcpyW(g_statusMsg, L"Vendor capture saved to SD: MERO/oem-bt-* ");
+}
+
+/* Read ROM/configuration only. Export files to SD; never execute OEM initializers. */
+static void BluetoothInspect(void)
+{
+    static const WCHAR *keys[] = {
+        L"Drivers\\BuiltIn\\HciExt", L"Drivers\\BuiltIn\\BtA2dpSnd"
+    };
+    static const WCHAR *files[] = {
+        L"Launch.exe", L"btpower.exe", L"btdrt.dll", L"bthutil.dll"
+    };
+    WCHAR root[128] = L"\\SDMMC\\MERO\\bluetooth-inspect";
+    WCHAR path[260], dest[260];
+    WIN32_FIND_DATAW fd;
+    HANDLE find, log;
+    char line[1024];
+    DWORD written;
+    unsigned int i;
+    CreateDirectoryW(CFG_DIR, NULL);
+    CreateDirectoryW(root, NULL);
+    wsprintfW(path, L"%s\\inventory.txt", root);
+    log = CreateFileW(path, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS,
+                      FILE_ATTRIBUTE_NORMAL, NULL);
+    if (log == INVALID_HANDLE_VALUE) {
+        lstrcpyW(g_statusMsg, L"Export needs SD card outside USB mass storage");
+        return;
+    }
+#define BT_WRITE() WriteFile(log, line, (DWORD)strlen(line), &written, NULL)
+    snprintf(line, sizeof(line), "Mero Bluetooth OEM evidence; shell 0.2.11\r\n"); BT_WRITE();
+    snprintf(line, sizeof(line), "bthutil getter=%d setter=%d known=%d mode=%lu\r\n",
+             g_bthGet != NULL, g_bthSet != NULL, g_bthKnown, g_bthMode); BT_WRITE();
+    find = FindFirstFileW(L"\\Windows\\*", &fd);
+    if (find != INVALID_HANDLE_VALUE) {
+        do {
+            snprintf(line, sizeof(line), "Windows: %ls size=%lu attr=%08lx\r\n",
+                     fd.cFileName, fd.nFileSizeLow, fd.dwFileAttributes); BT_WRITE();
+        } while (FindNextFileW(find, &fd));
+        FindClose(find);
+    }
+    for (i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {
+        HKEY key;
+        snprintf(line, sizeof(line), "HKLM\\%ls\r\n", keys[i]); BT_WRITE();
+        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, keys[i], 0, 0, &key) == ERROR_SUCCESS) {
+            DWORD index = 0, result;
+            do {
+                WCHAR name[128];
+                BYTE data[514];
+                DWORD nameLen = 128, dataLen = 512, type;
+                memset(data, 0, sizeof(data));
+                result = RegEnumValueW(key, index++, name, &nameLen, NULL, &type, data, &dataLen);
+                if (result == ERROR_SUCCESS) {
+                    if (type == REG_SZ) snprintf(line, sizeof(line), "  %ls=%ls\r\n", name, (WCHAR*)data);
+                    else if (type == REG_DWORD && dataLen == sizeof(DWORD)) {
+                        DWORD value; memcpy(&value, data, sizeof(value));
+                        snprintf(line, sizeof(line), "  %ls=%08lx\r\n", name, value);
+                    } else snprintf(line, sizeof(line), "  %ls type=%lu bytes=%lu\r\n", name, type, dataLen);
+                    BT_WRITE();
+                }
+            } while (result == ERROR_SUCCESS || result == ERROR_MORE_DATA);
+            RegCloseKey(key);
+        }
+    }
+    for (i = 0; i < sizeof(files) / sizeof(files[0]); i++) {
+        DWORD error = ERROR_FILE_NOT_FOUND;
+        BOOL copied = FALSE;
+        wsprintfW(path, L"\\Windows\\%s", files[i]);
+        wsprintfW(dest, L"%s\\%s", root, files[i]);
+        find = FindFirstFileW(path, &fd);
+        if (find != INVALID_HANDLE_VALUE) {
+            FindClose(find);
+            if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && fd.nFileSizeHigh == 0 &&
+                fd.nFileSizeLow <= 8 * 1024 * 1024) {
+                /* Keep previous captures; do not overwrite while a host reads them. */
+                copied = CopyFileW(path, dest, TRUE);
+                error = copied ? 0 : GetLastError();
+            } else error = ERROR_INVALID_DATA;
+        }
+        snprintf(line, sizeof(line), "Export %ls copied=%d error=%lu\r\n", files[i], copied, error); BT_WRITE();
+    }
+    FlushFileBuffers(log);
+    CloseHandle(log);
+#undef BT_WRITE
+    lstrcpyW(g_statusMsg, L"OEM details saved: SDMMC/MERO/bluetooth-inspect");
+}
+
+static void BluetoothPairing(void)
+{
+    /* Actual device inventory confirms this WinCE applet. No guessed applet index. */
+    if (GetFileAttributesW(L"\\Windows\\bthpnl.cpl") != INVALID_FILE_ATTRIBUTES) {
+        STARTUPINFOW si;
+        PROCESS_INFORMATION pi;
+        WCHAR args[] = L"\\Windows\\bthpnl.cpl";
+        memset(&si, 0, sizeof(si));
+        memset(&pi, 0, sizeof(pi));
+        si.cb = sizeof(si);
+        if (CreateProcessW(L"\\Windows\\ctlpnl.exe", args, NULL, NULL, FALSE,
+                           0, NULL, NULL, &si, &pi)) {
+            CloseHandle(pi.hThread);
+            CloseHandle(pi.hProcess);
+            lstrcpyW(g_statusMsg, L"Opened WinCE Bluetooth settings");
+            return;
+        }
+        wsprintfW(g_statusMsg, L"Bluetooth applet launch failed: %lu", GetLastError());
+        return;
+    }
+    /* Reuse only an installed pairing app, never the complete vendor launcher. */
+    HWND phone = FindWindowW(NULL, L"ANW_PHONELINK");
+    if (phone) {
+        EnableWindow(phone, TRUE);
+        ShowWindow(phone, SW_SHOW);
+        SetForegroundWindow(phone);
+        return;
+    }
+    if (GetFileAttributesW(L"\\Windows\\PhoneLink.exe") != INVALID_FILE_ATTRIBUTES &&
+        LaunchApp(L"\\Windows\\PhoneLink.exe", FALSE)) return;
+    lstrcpyW(g_statusMsg, L"OEM panel not identified; tap EXPORT OEM DETAILS");
+}
+
+
+/* Confirmed PhoneLink registered-message handlers: WPARAM=1 on, WPARAM=0 off. */
+static int g_oemPending = -1;
+static DWORD g_oemStarted;
+static HWND BluetoothOemWindow(void)
+{
+    HWND h = FindWindowW(NULL, L"ANW_PHONELINK");
+    if (!h) h = FindWindowW(L"ANW_PHONELINK", NULL);
+    return h;
+}
+static void BluetoothOemPower(int on)
+{
+    HWND h = BluetoothOemWindow();
+    if (!h) {
+        if (!on) { lstrcpyW(g_statusMsg, L"OEM backend is not running"); return; }
+        const WCHAR *path = L"\\ResidentFlash2\\App\\BT\\PhoneLink.exe";
+        if (GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES)
+            path = L"\\ResidentFlash\\App\\BT\\PhoneLink.exe";
+        if (!LaunchApp(path, FALSE)) { lstrcpyW(g_statusMsg, L"OEM backend start failed"); return; }
+        g_oemPending = on; g_oemStarted = GetTickCount();
+        lstrcpyW(g_statusMsg, L"Starting OEM Bluetooth backend...");
+        return;
+    }
+    ShowWindow(h, SW_HIDE);
+    if (PostMessageW(h, RegisterWindowMessageW(L"WM_ANWBT_INMSG_BTPOWER"), on, 0))
+        lstrcpyW(g_statusMsg, on ? L"OEM radio ON requested; test link in Bluetooth Files" : L"OEM radio OFF requested");
+    else lstrcpyW(g_statusMsg, L"OEM power request failed");
+    SetForegroundWindow(g_hWnd);
+}
+static void BluetoothOemTick(void)
+{
+    if (g_oemPending < 0) return;
+    if (BluetoothOemWindow()) {
+        int on = g_oemPending; g_oemPending = -1;
+        BluetoothOemPower(on); InvalidateRect(g_hWnd, NULL, FALSE);
+    } else if (GetTickCount() - g_oemStarted > 10000) {
+        g_oemPending = -1;
+        lstrcpyW(g_statusMsg, L"OEM backend did not create its window");
+        InvalidateRect(g_hWnd, NULL, FALSE);
+    }
+}
+
 static void OnPaint(HWND hWnd)
 {
     PAINTSTRUCT ps;
@@ -1097,6 +1429,7 @@ static void OnPaint(HWND hWnd)
     const WCHAR *pageTitle = L"OS SHELL";
     if (g_currentPage == PAGE_COMPANIONS) pageTitle = L"COMPANION LABS";
     else if (g_currentPage == PAGE_SYSTEM) pageTitle = L"SYSTEM TOOLS";
+    else if (g_currentPage == PAGE_BLUETOOTH) pageTitle = L"BLUETOOTH CONTROL";
     else if (g_currentPage == PAGE_ADVANCED) pageTitle = L"ADVANCED TOOLS";
     wsprintfW(buf, L"MERO // %s [v%s]", pageTitle, SHELL_VERSION);
     ExtTextOutW(memDC, 18, 8, 0, NULL, buf, lstrlenW(buf), NULL);
@@ -1177,6 +1510,7 @@ static void OnPaint(HWND hWnd)
     const WCHAR *pageShort = L"Main";
     if (g_currentPage == PAGE_COMPANIONS) pageShort = L"Companions";
     else if (g_currentPage == PAGE_SYSTEM) pageShort = L"System";
+    else if (g_currentPage == PAGE_BLUETOOTH) pageShort = L"Bluetooth";
     else if (g_currentPage == PAGE_ADVANCED) pageShort = L"Advanced";
     wsprintfW(buf, L"Foston FS-460BT // WinCE 5.0 Core // SDMMC: Active // %s (%d/4)", pageShort, (int)g_currentPage + 1);
     ExtTextOutW(memDC, 18, 234, 0, NULL, buf, lstrlenW(buf), NULL);
@@ -1267,12 +1601,12 @@ static void OnTouch(int x, int y)
                     }
                     break;
 
-                case 1: /* YouTube Music Deck */
-                    wsprintfW(g_statusMsg, L"Launching YouTube Music Deck...");
+                case 1: /* Sensor terminal */
+                    wsprintfW(g_statusMsg, L"Launching Sensor Terminal...");
                     InvalidateRect(g_hWnd, NULL, FALSE);
                     UpdateWindow(g_hWnd);
                     if (!LaunchApp(PATH_MEDIA_CTRL, TRUE)) {
-                        wsprintfW(g_statusMsg, L"YT Music Deck: Mero Stream Bridge active; app in build queue");
+                        wsprintfW(g_statusMsg, L"Sensor Terminal binary not found");
                         InvalidateRect(g_hWnd, NULL, FALSE);
                     }
                     break;
@@ -1335,14 +1669,10 @@ static void OnTouch(int x, int y)
                     LaunchVendorUI();
                     break;
 
-                case 3: /* Display & Color Tuner */
-                    wsprintfW(g_statusMsg, L"Launching Display & Color Tuner...");
+                case 3:
+                    g_currentPage = PAGE_BLUETOOTH;
+                    lstrcpyW(g_statusMsg, L"Bluetooth files: native client + OEM background backend");
                     InvalidateRect(g_hWnd, NULL, FALSE);
-                    UpdateWindow(g_hWnd);
-                    if (!LaunchApp(PATH_TUNER, TRUE)) {
-                        wsprintfW(g_statusMsg, L"Display Tuner not found: %s", PATH_TUNER);
-                        InvalidateRect(g_hWnd, NULL, FALSE);
-                    }
                     break;
 
                 case 4: /* Switch to Advanced Tools */
@@ -1359,13 +1689,29 @@ static void OnTouch(int x, int y)
                 }
                 break;
 
+            case PAGE_BLUETOOTH:
+                switch (i) {
+                case 0:
+                    if (!LaunchApp(PATH_BT, FALSE) &&
+                        !LaunchApp(L"\\SDMMC\\BT\\mero-bt.exe", FALSE))
+                        lstrcpyW(g_statusMsg, L"Download mero-bt.exe to SD/BT or install in SD/MERO");
+                    break;
+                case 1: BluetoothOemPower(1); break;
+                case 2: BluetoothOemPower(0); break;
+                case 3: lstrcpyW(g_statusMsg, BluetoothOemWindow() ? L"OEM backend running; use file client to test link" : L"OEM backend stopped; CONNECT in Bluetooth Files starts it"); break;
+                case 4: BluetoothCaptureVendor(); break;
+                case 5: g_currentPage = PAGE_SYSTEM; break;
+                }
+                InvalidateRect(g_hWnd, NULL, FALSE);
+                break;
+
             case PAGE_ADVANCED:
             default:
                 switch (i) {
                 case 0: /* Kill Vendor Watchdog */
                     {
                         int killed = KillVendorWatchdog();
-                        wsprintfW(g_statusMsg, L"Killed %d vendor daemons (ANWDOG/PhoneLink suppressed)", killed);
+                        wsprintfW(g_statusMsg, L"Stopped %d vendor watchdog / launcher tasks", killed);
                         InvalidateRect(g_hWnd, NULL, FALSE);
                     }
                     break;
@@ -1420,6 +1766,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
 {
     switch (uMsg) {
     case WM_CREATE:
+        MeroLiveInit(hWnd, NULL);
         g_hWnd = hWnd;
         HideVendorUI();
         UpdateSystemStatus();
@@ -1431,43 +1778,8 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         if (GetFileAttributesW(L"\\SDMMC\\MERO\\launch_strings.txt") == 0xFFFFFFFF) {
             PerformSystemDump();
         }
-        /* Auto-sync: If running from SDMMC, keep ResidentFlash updated in background */
-        {
-            WCHAR myPath[MAX_PATH];
-            GetModuleFileNameW(g_hInstance, myPath, MAX_PATH);
-            if (wcsstr(myPath, L"SDMMC") || wcsstr(myPath, L"sdmmc")) {
-                CreateDirectoryW(L"\\ResidentFlash\\MERO", NULL);
-                CopyFileW(L"\\SDMMC\\MERO\\mero-shell.exe", L"\\ResidentFlash\\MERO\\mero-shell.exe", FALSE);
-                CopyFileW(L"\\SDMMC\\MERO\\mero-cmd.exe", L"\\ResidentFlash\\MERO\\mero-cmd.exe", FALSE);
-                CopyFileW(L"\\SDMMC\\MERO\\mero-gallery.exe", L"\\ResidentFlash\\MERO\\mero-gallery.exe", FALSE);
-                CopyFileW(L"\\SDMMC\\MERO\\mero-tuner.exe", L"\\ResidentFlash\\MERO\\mero-tuner.exe", FALSE);
-                CopyFileW(L"\\SDMMC\\MERO\\mero-media-ctrl.exe", L"\\ResidentFlash\\MERO\\mero-media-ctrl.exe", FALSE);
-                CopyFileW(L"\\SDMMC\\MERO\\display.cfg", L"\\ResidentFlash\\MERO\\display.cfg", FALSE);
-                CopyFileW(L"\\SDMMC\\MERO\\mero-flash.exe", L"\\ResidentFlash\\MERO\\mero-flash.exe", FALSE);
-                CopyFileW(L"\\SDMMC\\MERO\\mero-shell.ico", L"\\ResidentFlash\\MERO\\mero-shell.ico", FALSE);
-                CopyFileW(L"\\SDMMC\\MERO\\mero-cmd.ico", L"\\ResidentFlash\\MERO\\mero-cmd.ico", FALSE);
-                CopyFileW(L"\\SDMMC\\MERO\\mero-gallery.ico", L"\\ResidentFlash\\MERO\\mero-gallery.ico", FALSE);
-                CopyFileW(L"\\SDMMC\\MERO\\mero-flash.ico", L"\\ResidentFlash\\MERO\\mero-flash.ico", FALSE);
+        /* Internal recovery binaries are updated only by an explicit deployment. */
 
-                /* Mirror Stream folder to ResidentFlash for USB/offline resilience */
-                CreateDirectoryW(L"\\ResidentFlash\\Stream", NULL);
-                {
-                    WIN32_FIND_DATAW wfdStr;
-                    HANDLE hFStr = FindFirstFileW(L"\\SDMMC\\Stream\\*.*", &wfdStr);
-                    if (hFStr != INVALID_HANDLE_VALUE) {
-                        do {
-                            if (!(wfdStr.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
-                                WCHAR sPath[MAX_PATH], dPath[MAX_PATH];
-                                wsprintfW(sPath, L"\\SDMMC\\Stream\\%s", wfdStr.cFileName);
-                                wsprintfW(dPath, L"\\ResidentFlash\\Stream\\%s", wfdStr.cFileName);
-                                CopyFileW(sPath, dPath, FALSE);
-                            }
-                        } while (FindNextFileW(hFStr, &wfdStr));
-                        FindClose(hFStr);
-                    }
-                }
-            }
-        }
         SetTimer(hWnd, TIMER_ID_TICK, 1000, NULL);
         return 0;
 
@@ -1475,6 +1787,9 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         return 1;
 
     case WM_TIMER:
+        if (wParam == MERO_LIVE_TIMER) { MeroLiveTick(hWnd); return 0; }
+        if (wParam == TIMER_ID_TICK) BluetoothOemTick();
+        if (mero_standby) return 0;
         if (wParam == TIMER_ID_TICK) {
             if (!IsWindowVisible(hWnd)) return 0;
             DWORD prevAvail = g_memAvailMB;
@@ -1516,6 +1831,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         return 0;
 
     case WM_DESTROY:
+        MeroLiveClose(hWnd);
         KillTimer(hWnd, TIMER_ID_TICK);
         PostQuitMessage(0);
         return 0;

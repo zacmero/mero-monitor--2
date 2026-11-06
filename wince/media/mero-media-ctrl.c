@@ -11,6 +11,7 @@
  */
 
 #define WIN32_LEAN_AND_MEAN
+#include <winsock2.h>
 #include <windows.h>
 #include <tlhelp32.h>
 #include <mmsystem.h>
@@ -18,6 +19,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "../mero-live.h"
 #include <math.h>
 
 #define DECK_VERSION        L"3.0.0"
@@ -79,23 +81,23 @@ static HANDLE         g_hGps = INVALID_HANDLE_VALUE;
 static char           g_gpsRxBuf[512] = "";
 static int            g_gpsRxLen = 0;
 static BOOL           g_gpsHasFix = FALSE;
-static WCHAR          g_gpsLat[32] = L"29 31.4820 S";
-static WCHAR          g_gpsLon[32] = L"51 20.1540 W";
+static WCHAR          g_gpsLat[32] = L"--";
+static WCHAR          g_gpsLon[32] = L"--";
 static float          g_gpsSpeedKmh = 0.0f;
-static float          g_gpsAltitudeM = 742.0f;
-static float          g_gpsHeadingDeg = 184.0f;
+static float          g_gpsAltitudeM = 0.0f;
+static float          g_gpsHeadingDeg = 0.0f;
 static DWORD          g_lastGpsSentenceTick = 0;
 
 /* --- Weather Telemetry State --- */
-static WCHAR          g_wxLocation[64]  = L"FARROUPILHA, RS [BR]";
-static WCHAR          g_wxCoord[64]     = L"LAT -29.36 | LON -50.81";
-static WCHAR          g_wxCondition[64] = L"Clear / Sunny";
-static int            g_wxTempC         = 13;
-static int            g_wxFeelsC        = 13;
-static int            g_wxHumidity      = 87;
-static WCHAR          g_wxWind[48]      = L"6 km/h SE";
-static WCHAR          g_wxPressure[32]  = L"1024 hPa";
-static WCHAR          g_wxPrecip[32]    = L"0.0 mm";
+static WCHAR          g_wxLocation[64]  = L"WAITING FOR HOST";
+static WCHAR          g_wxCoord[64]     = L"--";
+static WCHAR          g_wxCondition[64] = L"NO WEATHER DATA";
+static int            g_wxTempC         = 0;
+static int            g_wxFeelsC        = 0;
+static int            g_wxHumidity      = 0;
+static WCHAR          g_wxWind[48]      = L"--";
+static WCHAR          g_wxPressure[32]  = L"--";
+static WCHAR          g_wxPrecip[32]    = L"--";
 static int            g_wxUV            = 0;
 static WCHAR          g_wxUpdated[32]   = L"--:--";
 
@@ -107,9 +109,9 @@ typedef struct {
 } ForecastDay;
 
 static ForecastDay    g_forecast[3] = {
-    { L"TODAY", L"Sunny", 8, 15 },
-    { L"TOMORROW", L"Partly Cloudy", 9, 20 },
-    { L"DAY+2", L"Overcast", 13, 21 }
+    { L"TODAY", L"--", 0, 0 },
+    { L"TOMORROW", L"--", 0, 0 },
+    { L"DAY+2", L"--", 0, 0 }
 };
 
 /* --- SYSTEM TELEMETRY HARVESTING --- */
@@ -185,10 +187,18 @@ static const char *GetNmeaField(const char *str, int fieldIndex, char *outBuf, i
 static void ProcessNmeaSentence(const char *nmea)
 {
     char f[32];
-    if (strncmp(nmea, "$GPRMC", 6) == 0) {
+    const char *star = strchr(nmea, '*');
+    unsigned int expected, checksum = 0;
+    const char *c;
+    if (!star || sscanf(star + 1, "%2x", &expected) != 1) return;
+    for (c = nmea + 1; c < star; c++) checksum ^= (unsigned char)*c;
+    if (checksum != expected || strlen(nmea) < 7) return;
+    if (strncmp(nmea + 3, "RMC", 3) == 0) {
         /* $GPRMC,time,status,lat,latHem,lon,lonHem,speedKnots,heading,date,... */
         GetNmeaField(nmea, 2, f, sizeof(f));
         g_gpsHasFix = (f[0] == 'A');
+        g_lastGpsSentenceTick = GetTickCount();
+        if (!g_gpsHasFix) return;
 
         /* Sync System Clock with atomic GPS time */
         if (g_gpsHasFix) {
@@ -235,21 +245,21 @@ static void ProcessNmeaSentence(const char *nmea)
 
         g_lastGpsSentenceTick = GetTickCount();
 
-    } else if (strncmp(nmea, "$GPGGA", 6) == 0) {
+    } else if (strncmp(nmea + 3, "GGA", 3) == 0) {
         /* $GPGGA,time,lat,latHem,lon,lonHem,quality,sats,hdop,alt,altUnit,... */
         GetNmeaField(nmea, 6, f, sizeof(f));
-        if (f[0] && f[0] != '0') g_gpsHasFix = TRUE;
+        g_gpsHasFix = f[0] && f[0] != '0';
 
         GetNmeaField(nmea, 9, f, sizeof(f));
         if (f[0]) g_gpsAltitudeM = (float)atof(f);
 
         g_lastGpsSentenceTick = GetTickCount();
 
-    } else if (strncmp(nmea, "$GPGSV", 6) == 0) {
+    } else if (strncmp(nmea + 3, "GSV", 3) == 0) {
         /* $GPGSV,totalMsgs,msgNum,totalSats, sat1_prn,elev,azim,snr, ... */
         GetNmeaField(nmea, 3, f, sizeof(f));
         int totalSats = atoi(f);
-        if (totalSats > 0) g_satCount = (totalSats > MAX_SATS) ? MAX_SATS : totalSats;
+        g_satCount = (totalSats > MAX_SATS) ? MAX_SATS : totalSats;
 
         int msgNum = atoi(GetNmeaField(nmea, 2, f, sizeof(f)));
         int baseIdx = (msgNum - 1) * 4;
@@ -307,72 +317,101 @@ static void PollGpsReceiver(void)
         }
     }
 
-    /* If indoor or no satellite lock, synthesize plausible orbital targets so radar is always alive! */
-    DWORD now = GetTickCount();
-    if (g_lastGpsSentenceTick == 0 || (now - g_lastGpsSentenceTick) > 3000) {
-        g_satCount = 7;
-        int prns[7]  = { 3, 11, 14, 19, 22, 28, 31 };
-        int elevs[7] = { 65, 42, 28, 78, 15, 52, 36 };
-        int azims[7] = { 45, 120, 210, 315, 80, 160, 275 };
-        int snrs[7]  = { 42, 38, 25, 48, 18, 35, 29 };
-        int i;
-        for (i = 0; i < 7; i++) {
-            g_sats[i].prn  = prns[i];
-            g_sats[i].elev = elevs[i];
-            g_sats[i].azim = (azims[i] + (g_frameTick / 4)) % 360;
-            g_sats[i].snr  = snrs[i];
-            g_sats[i].active = TRUE;
-        }
+    /* Keep the radar sweep, but never invent satellite telemetry indoors. */
+    if (!g_lastGpsSentenceTick || (DWORD)(GetTickCount() - g_lastGpsSentenceTick) > 5000) {
+        g_satCount = 0;
+        memset(g_sats, 0, sizeof(g_sats));
+        g_gpsHasFix = FALSE;
+        lstrcpyW(g_gpsLat, L"--");
+        lstrcpyW(g_gpsLon, L"--");
+        g_gpsSpeedKmh = 0;
+        g_gpsAltitudeM = 0;
+        g_gpsHeadingDeg = 0;
     }
 }
 
 /* --- WEATHER STORAGE POLLING --- */
-static void PollWeatherFile(void)
+static BOOL g_wxHaveData = FALSE;
+static BOOL g_wxFromHost = FALSE;
+static DWORD g_wxReceivedTick = 0;
+static int g_wxAge = 86400;
+static char g_wxFileSnapshot[2048] = "";
+
+static void CopyWeatherText(WCHAR *destination, int capacity, const char *source)
 {
-    HANDLE hFile;
-    DWORD bytesRead;
-    char buf[2048];
+    WCHAR decoded[1024];
+    if (MultiByteToWideChar(CP_UTF8, 0, source, -1, decoded, 1024))
+        lstrcpynW(destination, decoded, capacity);
+}
 
-    hFile = CreateFileW(WEATHER_FILE_SDMMC, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
-                        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (hFile == INVALID_HANDLE_VALUE) {
-        hFile = CreateFileW(WEATHER_FILE_FLASH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
-                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    }
-
-    if (hFile != INVALID_HANDLE_VALUE) {
-        memset(buf, 0, sizeof(buf));
-        if (ReadFile(hFile, buf, sizeof(buf) - 1, &bytesRead, NULL) && bytesRead > 0) {
-            char *line = strtok(buf, "\r\n");
-            while (line) {
-                if (strncmp(line, "location=", 9) == 0) MultiByteToWideChar(CP_UTF8, 0, line + 9, -1, g_wxLocation, 64);
-                else if (strncmp(line, "coord=", 6) == 0) MultiByteToWideChar(CP_UTF8, 0, line + 6, -1, g_wxCoord, 64);
-                else if (strncmp(line, "desc=", 5) == 0) MultiByteToWideChar(CP_UTF8, 0, line + 5, -1, g_wxCondition, 64);
+static void ParseWeather(char *buf, const char *delimiters)
+{
+    char *line = strtok(buf, delimiters);
+    BOOL temperature = FALSE, location = FALSE;
+    while (line) {
+                if (strncmp(line, "location=", 9) == 0) CopyWeatherText(g_wxLocation, 64, line + 9);
+                else if (strncmp(line, "coord=", 6) == 0) CopyWeatherText(g_wxCoord, 64, line + 6);
+                else if (strncmp(line, "desc=", 5) == 0) CopyWeatherText(g_wxCondition, 64, line + 5);
                 else if (strncmp(line, "temp_c=", 7) == 0) g_wxTempC = atoi(line + 7);
                 else if (strncmp(line, "feels_like=", 11) == 0) g_wxFeelsC = atoi(line + 11);
                 else if (strncmp(line, "humidity=", 9) == 0) g_wxHumidity = atoi(line + 9);
-                else if (strncmp(line, "wind=", 5) == 0) MultiByteToWideChar(CP_UTF8, 0, line + 5, -1, g_wxWind, 48);
-                else if (strncmp(line, "pressure=", 9) == 0) MultiByteToWideChar(CP_UTF8, 0, line + 9, -1, g_wxPressure, 32);
-                else if (strncmp(line, "precip=", 7) == 0) MultiByteToWideChar(CP_UTF8, 0, line + 7, -1, g_wxPrecip, 32);
+                else if (strncmp(line, "wind=", 5) == 0) CopyWeatherText(g_wxWind, 48, line + 5);
+                else if (strncmp(line, "pressure=", 9) == 0) CopyWeatherText(g_wxPressure, 32, line + 9);
+                else if (strncmp(line, "precip=", 7) == 0) CopyWeatherText(g_wxPrecip, 32, line + 7);
                 else if (strncmp(line, "uv=", 3) == 0) g_wxUV = atoi(line + 3);
-                else if (strncmp(line, "updated=", 8) == 0) MultiByteToWideChar(CP_UTF8, 0, line + 8, -1, g_wxUpdated, 32);
-                else if (strncmp(line, "d1_name=", 8) == 0) MultiByteToWideChar(CP_UTF8, 0, line + 8, -1, g_forecast[0].day, 24);
-                else if (strncmp(line, "d1_desc=", 8) == 0) MultiByteToWideChar(CP_UTF8, 0, line + 8, -1, g_forecast[0].desc, 32);
+                else if (strncmp(line, "updated=", 8) == 0) CopyWeatherText(g_wxUpdated, 32, line + 8);
+                else if (strncmp(line, "d1_name=", 8) == 0) CopyWeatherText(g_forecast[0].day, 24, line + 8);
+                else if (strncmp(line, "d1_desc=", 8) == 0) CopyWeatherText(g_forecast[0].desc, 32, line + 8);
                 else if (strncmp(line, "d1_min=", 7) == 0) g_forecast[0].minC = atoi(line + 7);
                 else if (strncmp(line, "d1_max=", 7) == 0) g_forecast[0].maxC = atoi(line + 7);
-                else if (strncmp(line, "d2_name=", 8) == 0) MultiByteToWideChar(CP_UTF8, 0, line + 8, -1, g_forecast[1].day, 24);
-                else if (strncmp(line, "d2_desc=", 8) == 0) MultiByteToWideChar(CP_UTF8, 0, line + 8, -1, g_forecast[1].desc, 32);
+                else if (strncmp(line, "d2_name=", 8) == 0) CopyWeatherText(g_forecast[1].day, 24, line + 8);
+                else if (strncmp(line, "d2_desc=", 8) == 0) CopyWeatherText(g_forecast[1].desc, 32, line + 8);
                 else if (strncmp(line, "d2_min=", 7) == 0) g_forecast[1].minC = atoi(line + 7);
                 else if (strncmp(line, "d2_max=", 7) == 0) g_forecast[1].maxC = atoi(line + 7);
-                else if (strncmp(line, "d3_name=", 8) == 0) MultiByteToWideChar(CP_UTF8, 0, line + 8, -1, g_forecast[2].day, 24);
-                else if (strncmp(line, "d3_desc=", 8) == 0) MultiByteToWideChar(CP_UTF8, 0, line + 8, -1, g_forecast[2].desc, 32);
+                else if (strncmp(line, "d3_name=", 8) == 0) CopyWeatherText(g_forecast[2].day, 24, line + 8);
+                else if (strncmp(line, "d3_desc=", 8) == 0) CopyWeatherText(g_forecast[2].desc, 32, line + 8);
                 else if (strncmp(line, "d3_min=", 7) == 0) g_forecast[2].minC = atoi(line + 7);
                 else if (strncmp(line, "d3_max=", 7) == 0) g_forecast[2].maxC = atoi(line + 7);
-                line = strtok(NULL, "\r\n");
-            }
-        }
-        CloseHandle(hFile);
+        if (strncmp(line, "temp_c=", 7) == 0) temperature = TRUE;
+        if (strncmp(line, "location=", 9) == 0) location = TRUE;
+        if (strncmp(line, "age=", 4) == 0) g_wxAge = atoi(line + 4);
+        line = strtok(NULL, delimiters);
     }
+    if (temperature && location) g_wxHaveData = TRUE;
+}
+
+static void HandleHostLine(char *line)
+{
+    if (strncmp(line, "MERO:WX:", 8) == 0) {
+        ParseWeather(line + 8, "|");
+        g_wxReceivedTick = GetTickCount();
+        g_wxFromHost = TRUE;
+    }
+}
+
+static void PollWeatherFile(void)
+{
+    HANDLE file;
+    DWORD count;
+    char buf[2048];
+    /* A host snapshot is authoritative while its connection is alive. */
+    if (g_wxFromHost) return;
+    file = CreateFileW(WEATHER_FILE_SDMMC, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                       NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file == INVALID_HANDLE_VALUE)
+        file = CreateFileW(WEATHER_FILE_FLASH, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                           NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file == INVALID_HANDLE_VALUE) return;
+    if (ReadFile(file, buf, sizeof(buf) - 1, &count, NULL) && count) {
+        buf[count] = 0;
+        if (strcmp(buf, g_wxFileSnapshot) != 0) {
+            strcpy(g_wxFileSnapshot, buf);
+            ParseWeather(buf, "\r\n");
+            /* Offline files have no verified freshness. Show them as cached. */
+            g_wxAge = 86400;
+        }
+    }
+    CloseHandle(file);
 }
 
 /* --- FM TRANSMITTER & AUDIO SYNTHESIZER SUBSYSTEM --- */
@@ -380,17 +419,18 @@ static void PollWeatherFile(void)
 #define FM_CFG_FLASH        L"\\ResidentFlash\\MERO\\fm.cfg"
 
 static int   g_fmFreqKHz     = 107900;  /* 107.9 MHz default (in kHz) */
-static BOOL  g_fmTxActive    = TRUE;    /* FM broadcast active */
+static BOOL  g_fmTxActive    = FALSE;    /* Requested state; hardware controlled by vendor */
 static BOOL  g_fmSpkActive   = TRUE;    /* Local speaker active */
 
 typedef enum {
     FM_AUDIO_MUTE  = 0,
     FM_AUDIO_TONE  = 1,   /* 1 kHz synth tone */
     FM_AUDIO_NOISE = 2,   /* White noise */
-    FM_AUDIO_COUNT = 3
+    FM_AUDIO_AMBIENT = 3, /* Slowly changing chord and gentle pulse */
+    FM_AUDIO_COUNT = 4
 } FmAudioMode;
 
-static FmAudioMode g_fmAudioMode = FM_AUDIO_TONE;
+static FmAudioMode g_fmAudioMode = FM_AUDIO_MUTE;
 
 /* Audio synth constants and buffers */
 #define AUDIO_SAMPLE_RATE  22050
@@ -401,6 +441,8 @@ static HWAVEOUT   g_hWaveOut = NULL;
 static WAVEHDR    g_waveHdr[AUDIO_NUM_BUFFERS];
 static short      g_pcmBuf[AUDIO_NUM_BUFFERS][AUDIO_BUF_SAMPLES];
 static float      g_tonePhase = 0.0f;
+static unsigned long g_audioSample = 0;
+static short g_scope[448];
 
 /* FM interactive touch button areas */
 static const RECT g_rcFmDown10  = { 156, 30, 202, 58 }; /* [ -1.0 ] */
@@ -414,6 +456,8 @@ static const RECT g_rcSpkBtn    = { 176, 152, 310, 176 }; /* [ SPEAKER: ON / MUT
 static const RECT g_rcPresetBtn = { 316, 152, 466, 176 }; /* [ PRESET >> ] */
 
 /* Apply hardware FM transmitter frequency and power state */
+/* Preserved for forensic reference only: unverified driver ABI is never called. */
+#if 0
 static void ApplyFmHardware(int freqKHz, BOOL enable)
 {
     int i;
@@ -429,7 +473,7 @@ static void ApplyFmHardware(int freqKHz, BOOL enable)
             inBuf[1] = (DWORD)freqKHz;
             inBuf[2] = freq100k;
             inBuf[3] = 0;
-            
+
             DeviceIoControl(hDev, 0x00220004, inBuf, sizeof(inBuf), NULL, 0, &bytesRet, NULL);
             DeviceIoControl(hDev, 0x00220008, &freq100k, sizeof(DWORD), NULL, 0, &bytesRet, NULL);
             DeviceIoControl(hDev, 0x0022000C, &inBuf[0], sizeof(DWORD), NULL, 0, &bytesRet, NULL);
@@ -491,6 +535,14 @@ static void ApplyFmHardware(int freqKHz, BOOL enable)
     }
 }
 
+#endif
+static void ApplyFmHardware(int freqKHz, BOOL enable)
+{
+    (void)freqKHz;
+    (void)enable;
+    /* Use the vendor FM panel for hardware routing until its ABI is verified. */
+}
+
 /* Audio synthesizer initialization */
 static void InitAudioSynth(void)
 {
@@ -521,9 +573,16 @@ static void InitAudioSynth(void)
     }
 }
 
+static void CloseAudioSynth(void);
+
 /* Synthesize next chunk of audio and submit to waveOut */
 static void FeedAudioSynth(void)
 {
+    if (g_currentView != VIEW_FM || g_fmAudioMode == FM_AUDIO_MUTE || mero_standby) {
+        CloseAudioSynth();
+        memset(g_scope, 0, sizeof(g_scope));
+        return;
+    }
     if (!g_hWaveOut) {
         InitAudioSynth();
         if (!g_hWaveOut) return;
@@ -547,10 +606,23 @@ static void FeedAudioSynth(void)
                 for (i = 0; i < AUDIO_BUF_SAMPLES; i++) {
                     pcm[i] = (short)(((rand() % 32768) - 16384) * 0.40f);
                 }
+            } else if (g_fmAudioMode == FM_AUDIO_AMBIENT) {
+                static const float notes[] = {130.81f, 146.83f, 164.81f, 196.0f};
+                for (i = 0; i < AUDIO_BUF_SAMPLES; i++) {
+                    float t = (float)g_audioSample / AUDIO_SAMPLE_RATE;
+                    float frequency = notes[(g_audioSample / (AUDIO_SAMPLE_RATE * 8)) % 4];
+                    float envelope = 0.30f + 0.20f * sinf(t * 1.7f);
+                    float step = (float)(2.0 * M_PI) * frequency / AUDIO_SAMPLE_RATE;
+                    pcm[i] = (short)((sinf(g_tonePhase) + 0.35f * sinf(g_tonePhase * 1.5f)) * envelope * 9000.0f);
+                    g_tonePhase += step;
+                    if (g_tonePhase > (float)(4.0 * M_PI)) g_tonePhase -= (float)(4.0 * M_PI);
+                    g_audioSample++;
+                }
             } else {
                 memset(pcm, 0, sizeof(g_pcmBuf[b]));
             }
 
+            for (i = 0; i < 448; i++) g_scope[i] = pcm[i * 4];
             g_waveHdr[b].lpData = (LPSTR)pcm;
             g_waveHdr[b].dwBufferLength = sizeof(g_pcmBuf[b]);
             g_waveHdr[b].dwFlags = 0;
@@ -581,8 +653,8 @@ static void LoadFmConfig(void)
     char buffer[256];
 
     g_fmFreqKHz = 107900;
-    g_fmTxActive = TRUE;
-    g_fmAudioMode = FM_AUDIO_TONE;
+    g_fmTxActive = FALSE;
+    g_fmAudioMode = FM_AUDIO_MUTE;
     g_fmSpkActive = TRUE;
 
     hFile = CreateFileW(FM_CFG_SDMMC, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
@@ -653,34 +725,7 @@ static void SaveFmConfig(void)
 }
 
 /* Suppress Winsock and repllog desktop communications error dialogs */
-static void DismissWinsockDialogs(void)
-{
-    HWND hWnd = FindWindowW(NULL, L"Cannot start communications with the desktop computer.");
-    if (hWnd) PostMessageW(hWnd, WM_CLOSE, 0, 0);
-    HWND hWnd2 = FindWindowW(NULL, L"Communications Error");
-    if (hWnd2) PostMessageW(hWnd2, WM_CLOSE, 0, 0);
-    HWND hWndRepl = FindWindowW(NULL, L"Repllog");
-    if (hWndRepl) PostMessageW(hWndRepl, WM_CLOSE, 0, 0);
-
-    HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    if (hSnap != INVALID_HANDLE_VALUE) {
-        PROCESSENTRY32 pe;
-        pe.dwSize = sizeof(pe);
-        if (Process32First(hSnap, &pe)) {
-            do {
-                if (_wcsicmp(pe.szExeFile, L"repllog.exe") == 0 ||
-                    _wcsicmp(pe.szExeFile, L"rnaapp.exe") == 0) {
-                    HANDLE hProc = OpenProcess(0x0001, FALSE, pe.th32ProcessID);
-                    if (hProc) {
-                        TerminateProcess(hProc, 0);
-                        CloseHandle(hProc);
-                    }
-                }
-            } while (Process32Next(hSnap, &pe));
-        }
-        CloseHandle(hSnap);
-    }
-}
+/* ActiveSync owns USB networking: never terminate repllog.exe or rnaapp.exe. */
 
 /* ====================================================================
  * VIEW 1: CYBER CHRONO & SYSTEM MATRIX
@@ -820,20 +865,20 @@ static void PaintClockView(HDC hdc)
     SetTextColor(hdc, (g_hGps != INVALID_HANDLE_VALUE) ? RGB(0, 255, 128) : RGB(255, 180, 40));
     ExtTextOutW(hdc, 270, gy, 0, NULL, buf, lstrlenW(buf), NULL); gy += 16;
 
-    wsprintfW(buf, L"> FMC.RADIO: 107.9 MHz [STBY]");
+    wsprintfW(buf, L"> FMC.RADIO: VENDOR CONTROL");
     SetTextColor(hdc, RGB(255, 215, 0));
     ExtTextOutW(hdc, 270, gy, 0, NULL, buf, lstrlenW(buf), NULL); gy += 16;
 
-    wsprintfW(buf, L"> STORAGE: FAT32 DIRECT LINK");
+    wsprintfW(buf, L"> HOST: %ls", mero_socket != INVALID_SOCKET && !mero_connecting ? L"USB CONNECTED" : L"OFFLINE");
     SetTextColor(hdc, RGB(100, 180, 160));
     ExtTextOutW(hdc, 270, gy, 0, NULL, buf, lstrlenW(buf), NULL); gy += 16;
 
     /* Subtle Flashing Terminal Prompt */
     if ((g_frameTick / 10) % 2 == 0) {
-        wsprintfW(buf, L"> SYS.INTEGRITY: 100%% _");
+        wsprintfW(buf, L"> DISPLAY: ACTIVE _");
         SetTextColor(hdc, RGB(0, 255, 200));
     } else {
-        wsprintfW(buf, L"> SYS.INTEGRITY: 100%%");
+        wsprintfW(buf, L"> DISPLAY: ACTIVE");
         SetTextColor(hdc, RGB(0, 200, 160));
     }
     ExtTextOutW(hdc, 270, gy, 0, NULL, buf, lstrlenW(buf), NULL); gy += 18;
@@ -960,12 +1005,12 @@ static void PaintGpsRadarView(HDC hdc)
     y += 20;
     SetTextColor(hdc, RGB(80, 160, 140));
     ExtTextOutW(hdc, rightX, y, 0, NULL, L"SPEED:", 6, NULL);
-    wsprintfW(buf, L"%.1f KM/H", g_gpsSpeedKmh);
+    wsprintfW(buf, L"%d KM/H", (int)g_gpsSpeedKmh);
     SetTextColor(hdc, RGB(255, 215, 0));
     ExtTextOutW(hdc, rightX + 60, y, 0, NULL, buf, lstrlenW(buf), NULL);
 
     ExtTextOutW(hdc, rightX + 150, y, 0, NULL, L"ALT:", 4, NULL);
-    wsprintfW(buf, L"%.1f M", g_gpsAltitudeM);
+    wsprintfW(buf, L"%d M", (int)g_gpsAltitudeM);
     SetTextColor(hdc, RGB(0, 240, 255));
     ExtTextOutW(hdc, rightX + 190, y, 0, NULL, buf, lstrlenW(buf), NULL);
 
@@ -973,7 +1018,7 @@ static void PaintGpsRadarView(HDC hdc)
     y += 18;
     SetTextColor(hdc, RGB(80, 160, 140));
     ExtTextOutW(hdc, rightX, y, 0, NULL, L"HEADING:", 8, NULL);
-    wsprintfW(buf, L"%.1f DEG", g_gpsHeadingDeg);
+    wsprintfW(buf, L"%d DEG", (int)g_gpsHeadingDeg);
     SetTextColor(hdc, RGB(160, 240, 220));
     ExtTextOutW(hdc, rightX + 60, y, 0, NULL, buf, lstrlenW(buf), NULL);
 
@@ -1019,7 +1064,6 @@ static void PaintGpsRadarView(HDC hdc)
 static void PaintFmView(HDC hdc)
 {
     WCHAR buf[128];
-    float fFreq = (float)g_fmFreqKHz / 1000.0f;
 
     /* --- TOP BAR: CARRIER FREQUENCY & TUNING CONTROLS --- */
     /* 1. Large Frequency Readout Box */
@@ -1035,7 +1079,7 @@ static void PaintFmView(HDC hdc)
     DeleteObject(hFreqBr);
 
     /* Large Bold Frequency Text */
-    wsprintfW(buf, L"%.1f MHz", fFreq);
+    wsprintfW(buf, L"%d.%d MHz", g_fmFreqKHz / 1000, (g_fmFreqKHz / 100) % 10);
     LOGFONT lf;
     memset(&lf, 0, sizeof(lf));
     lf.lfHeight = -22;
@@ -1083,7 +1127,7 @@ static void PaintFmView(HDC hdc)
         DeleteObject(hTxBr);
 
         SetTextColor(hdc, txBorder);
-        DrawTextW(hdc, g_fmTxActive ? L"[ FM TX: ON ]" : L"[ FM TX: OFF ]", -1, (LPRECT)&g_rcFmTx, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        DrawTextW(hdc, g_fmTxActive ? L"[ TX: REQUEST ]" : L"[ TX: OFF ]", -1, (LPRECT)&g_rcFmTx, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
 
     /* --- OSCILLOSCOPE FRAME (x=14, y=62, w=452, h=86) --- */
@@ -1101,11 +1145,13 @@ static void PaintFmView(HDC hdc)
     /* Oscilloscope Sub-header */
     SetTextColor(hdc, RGB(0, 200, 160));
     if (g_fmAudioMode == FM_AUDIO_TONE) {
-        wsprintfW(buf, L"OSC: 1 kHz TEST TONE // CARRIER %.1f MHz %ls", fFreq, g_fmTxActive ? L"[BROADCASTING]" : L"[STANDBY]");
+        wsprintfW(buf, L"OSC: 1 kHz PCM // USE VENDOR FM PANEL");
     } else if (g_fmAudioMode == FM_AUDIO_NOISE) {
-        wsprintfW(buf, L"OSC: WHITE NOISE GENERATOR // CARRIER %.1f MHz %ls", fFreq, g_fmTxActive ? L"[BROADCASTING]" : L"[STANDBY]");
+        wsprintfW(buf, L"OSC: NOISE PCM // USE VENDOR FM PANEL");
+    } else if (g_fmAudioMode == FM_AUDIO_AMBIENT) {
+        lstrcpyW(buf, L"OSC: AMBIENT PCM // VENDOR FM ROUTING");
     } else {
-        wsprintfW(buf, L"OSC: SILENT CARRIER // %.1f MHz %ls", fFreq, g_fmTxActive ? L"[CARRIER ACTIVE]" : L"[STANDBY]");
+        wsprintfW(buf, L"OSC: MUTED // USE VENDOR FM PANEL");
     }
     ExtTextOutW(hdc, 22, 66, 0, NULL, buf, lstrlenW(buf), NULL);
 
@@ -1130,21 +1176,7 @@ static void PaintFmView(HDC hdc)
     int x;
     int oscW = 448;
     for (x = 0; x < oscW; x++) {
-        int wy = midY;
-        if (g_fmAudioMode == FM_AUDIO_TONE) {
-            float t = (float)(x * 0.08f + g_oscPhase * 2.0f);
-            float w = sinf(t) * 30.0f + sinf(t * 2.0f + 0.4f) * 6.0f;
-            wy = midY + (int)w;
-        } else if (g_fmAudioMode == FM_AUDIO_NOISE) {
-            int rnd = ((x * 1103515245 + g_frameTick * 12345) >> 16) & 0x3F;
-            wy = midY + (rnd - 32);
-        } else {
-            if (g_fmTxActive) {
-                wy = midY + (int)(sinf(x * 0.06f + g_oscPhase) * 4.0f);
-            } else {
-                wy = midY;
-            }
-        }
+        int wy = midY - (int)((long)g_scope[x] * 30 / 16384);
         if (wy < 80) wy = 80;
         if (wy > 144) wy = 144;
 
@@ -1157,7 +1189,7 @@ static void PaintFmView(HDC hdc)
     /* --- AUDIO & OUTPUT CONTROLS BAR (y=152..176) --- */
     /* 1. Audio Mode Toggle Button */
     {
-        const WCHAR *audioLabels[] = { L"AUDIO: MUTE", L"AUDIO: 1kHz TONE", L"AUDIO: WHITE NOISE" };
+        const WCHAR *audioLabels[] = { L"AUDIO: MUTE", L"AUDIO: 1kHz TONE", L"AUDIO: WHITE NOISE", L"AUDIO: AMBIENT" };
         COLORREF aBorder = (g_fmAudioMode != FM_AUDIO_MUTE) ? RGB(0, 255, 180) : RGB(140, 140, 140);
         HBRUSH hABr = CreateSolidBrush(RGB(8, 24, 20));
         hOldBr = (HBRUSH)SelectObject(hdc, hABr);
@@ -1206,31 +1238,19 @@ static void PaintFmView(HDC hdc)
         DrawTextW(hdc, L"PRESETS [88.5/98.1/107.9]", -1, (LPRECT)&g_rcPresetBtn, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
 
-    /* --- HARMONIC EQUALIZER SPECTRUM BARS (y=180..230) --- */
+    /* --- PCM ENERGY BARS (y=180..230) --- */
     int eqY = 180, eqH = 46, numBars = 20, eqBarW = 18, eqGap = 4;
     int b;
     for (b = 0; b < numBars; b++) {
         int bx = 16 + b * (eqBarW + eqGap);
         int barVal = 2;
 
-        if (g_fmAudioMode == FM_AUDIO_TONE) {
-            if (b == 7) {
-                barVal = 38 + (int)(sinf(g_oscPhase * 3.0f) * 6.0f);
-            } else if (b == 6 || b == 8) {
-                barVal = 18 + (int)(sinf(g_oscPhase * 2.5f) * 4.0f);
-            } else if (b == 14) {
-                barVal = 14 + (int)(sinf(g_oscPhase * 4.0f) * 3.0f);
-            } else if (b == 18) {
-                barVal = 8;
-            } else {
-                barVal = 3 + (b % 3);
-            }
-        } else if (g_fmAudioMode == FM_AUDIO_NOISE) {
-            int nRnd = ((b * 16807 + g_frameTick * 48271) >> 16) & 0x1F;
-            barVal = 10 + nRnd;
-            if (barVal > eqH) barVal = eqH;
-        } else {
-            barVal = g_fmTxActive ? (4 + (b % 3)) : 2;
+        /* Time-domain energy of submitted PCM, not invented spectrum bins. */
+        {
+            long energy = 0;
+            int sample;
+            for (sample = b * 22; sample < (b + 1) * 22; sample++) energy += abs(g_scope[sample]);
+            barVal = (int)(energy / 22 * eqH / 14000);
         }
 
         if (barVal < 2) barVal = 2;
@@ -1253,7 +1273,7 @@ static void PaintFmView(HDC hdc)
 
     /* Subtext Telemetry */
     SetTextColor(hdc, RGB(90, 150, 130));
-    wsprintfW(buf, L"FM TX: FMC1:/KT0801 @ %.1f MHz // CAR RECEIVER: TUNE TO %.1f MHz", fFreq, fFreq);
+    lstrcpyW(buf, L"PCM ENERGY // SET TRANSMITTER IN VENDOR FM PANEL");
     ExtTextOutW(hdc, 16, 232, 0, NULL, buf, lstrlenW(buf), NULL);
 }
 
@@ -1327,6 +1347,13 @@ static void DrawWeatherGlyph(HDC hdc, int x, int y, int w, int h, const WCHAR *c
 
 static void PaintWeatherView(HDC memDC)
 {
+    RECT status = { 10, 220, 185, 238 };
+    BOOL stale = !g_wxFromHost || g_wxAge > 1200 || (DWORD)(GetTickCount() - g_wxReceivedTick) > 15000;
+    SetTextColor(memDC, stale ? RGB(255, 180, 0) : RGB(0, 255, 128));
+    DrawTextW(memDC, !g_wxHaveData ? L"NO DATA // USB SYNC" :
+              stale ? L"WEATHER: CACHED" : L"HOST WEATHER: LIVE", -1, &status, DT_LEFT | DT_SINGLELINE);
+    if (!g_wxHaveData) return;
+
     WCHAR buf[128];
     int leftX = 10;
 
@@ -1650,13 +1677,12 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
 {
     switch (uMsg) {
     case WM_CREATE:
+        MeroLiveInit(hWnd, HandleHostLine);
         g_hWnd = hWnd;
         UpdateSystemMetrics();
         InitGpsPort();
         PollWeatherFile();
         LoadFmConfig();
-        InitAudioSynth();
-        DismissWinsockDialogs();
 
         /* Timers: 50ms (20 FPS smooth animation), 1000ms (system update) */
         SetTimer(hWnd, TIMER_ID_FRAME, 50, NULL);
@@ -1664,6 +1690,12 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         return 0;
 
     case WM_TIMER:
+        if (wParam == MERO_LIVE_TIMER) {
+            MeroLiveTick(hWnd);
+            if (mero_standby) CloseAudioSynth();
+            return 0;
+        }
+        if (mero_standby) return 0;
         if (wParam == TIMER_ID_FRAME) {
             g_frameTick++;
             g_radarAngle = (g_radarAngle + 4) % 360;
@@ -1679,7 +1711,8 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
             InvalidateRect(hWnd, NULL, FALSE);
         } else if (wParam == TIMER_ID_SLOW) {
             UpdateSystemMetrics();
-            DismissWinsockDialogs();
+            InitGpsPort();
+
             if (g_currentView == VIEW_WEATHER) {
                 PollWeatherFile();
             }
@@ -1695,6 +1728,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         return 0;
 
     case WM_DESTROY:
+        MeroLiveClose(hWnd);
         KillTimer(hWnd, TIMER_ID_FRAME);
         KillTimer(hWnd, TIMER_ID_SLOW);
         CloseAudioSynth();

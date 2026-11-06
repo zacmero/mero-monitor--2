@@ -74,3 +74,22 @@ connects to that address and reconnects automatically. The bridge sends newline-
 
 Do not use the SD card as a live mailbox while WinCE has it mounted. Mass Storage is
 only the deployment path; PPP/TCP carries live state.
+# Current bridge
+
+For the current weather/cinema runtime, persistent PPP service, and device-specific recovery constraints, see [repair notes](../../docs/REPAIR.md). Older transport examples below are retained as reference; the current apps never terminate ActiveSync or use raw serial writes for live state.
+
+## Bluetooth FTP staging service
+
+`mero-bt-ftp.service` serves only `~/.local/share/mero-foston-bluetooth/`. The verified Foston setup uses this service for its initial native-client download and subsequent custom-client listing, download, and upload. Keep the Foston in ActiveSync/PC Link so its SD card is writable locally; this link does not require a working USB connection.
+
+The checked-in unit describes the tested mero-machine runtime: BlueZ 5.72 `obexd` and the libraries reported by its `ldd` are copied from the laptop under `~/.local/share/mero/obex-compat/`, retaining their `usr/libexec/bluetooth/` and `lib/x86_64-linux-gnu/` paths. These binaries are not vendored in Git, and installing this unit alone does not install its runtime. It loads only the `ftp`, `bluetooth`, and `filesystem` plugins, without allowing symlinks outside the staging root. System BlueZ packages and kernel drivers are unchanged.
+
+BlueZ 5.87 `obexd` refused to register its transport while mero-machine was at the greeter without an active local desktop session. The private 5.72 runtime avoids that startup dependency and is enabled as a user service with lingering on this host. Other hosts may use their packaged `obexd`; update the unit's `ExecStart` and library path to match and verify that it advertises FTP UUID `1106`, including after reboot.
+
+```bash
+rtk systemctl --user status mero-bt-ftp.service
+rtk journalctl --user -u mero-bt-ftp.service -n 30
+rtk systemctl --user stop mero-bt-ftp.service
+```
+
+Shared ARM executables are build outputs, not automatic updates. The custom client stages downloads on SD and does not overwrite the installed shell or recovery binaries. Initial pairing still uses the device's native Bluetooth controls.

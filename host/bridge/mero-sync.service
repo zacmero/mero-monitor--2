@@ -1,0 +1,14 @@
+[Unit]
+Description=Foston USB sync transport (validated ipaq device only)
+After=systemd-udevd.service firewalld.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /home/zacmero/projects/mero-monitor-\x232/host/bridge/mero_sync.py
+Restart=on-failure
+RestartSec=3
+KillMode=control-group
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -20,7 +20,7 @@ all: $(TARGET)
 ifeq ($(CC_LOCAL),)
 $(TARGET): $(SRCS) $(RC_SRCS)
 	@echo "Building with Docker ($(DOCKER_IMG))..."
-	docker run --rm -u $(shell id -u):$(shell id -g) -v "$(CURDIR)":/work -w /work $(DOCKER_IMG) \
+	docker run --rm -u $(shell id -u):$(shell id -g) -v "$(abspath ..)":/wince -w /wince/$(notdir $(CURDIR)) $(DOCKER_IMG) \
 		sh -c "arm-mingw32ce-windres -i $(RC_SRCS) -o $(RES_OBJ) && arm-mingw32ce-gcc $(CFLAGS) -o $(TARGET) $(SRCS) $(RES_OBJ) $(LDFLAGS) $(LIBS)"
 	@echo "Built $(TARGET) successfully: $$(ls -lh $(TARGET) | awk '{print $$5}')"
 else
