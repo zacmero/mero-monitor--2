@@ -45,3 +45,35 @@ Stream YouTube Music state from the Linux bridge to `mero-media-ctrl.exe` reliab
 - [x] Verify custom client list and download with user.
 - [x] Verify upload byte for byte on PC.
 - Publishing authorized by user; commit and push outcome recorded in Git history.
+
+### Agent-enabled device workflow (2026-11-05)
+- [x] Inspect existing native transport and PC OBEX APIs.
+- [x] Confirm direct PC-initiated FTP unavailable (Unable to find service record).
+- [x] Add authenticated command polling to native transfer app.
+- [x] Add host CLI with verified results, backups, rollback and app controls.
+- [x] Document agent operating contract in AGENTS.md.
+- [x] Validate protocol and file-operation safety; bootstrap device build.
+- [x] Verify live agent file update/read/rollback over Bluetooth.
+
+### Useful apps and coherent shell (2026-11-05)
+- [x] Inspect current media/weather, launcher/defaults and close behavior.
+- [x] Record all brainstorm ideas and priorities.
+- [x] Add live Bluetooth weather/state feed without per-snapshot job backups.
+- [x] Improve current weather view with local animation and freshness.
+- [x] Centralize apps in Companion Labs; persisted default app and consistent return to shell.
+- [x] Verify YouTube Music state/control capabilities and implement a reliable deck if supported.
+- [x] Build/test, deploy over agent with backups and verify on hardware.
+
+- [x] Add current-track artwork with a single RAM cache and immediate obsolete-cover purge.
+- [x] Finish thumbnail capture, black-screen/wake regression and startup/return hardware checks.
+- [ ] Physical cold-power startup and automatic Bluetooth reconnection: awaiting user test.
+
+### Cold-start regression — active investigation
+- [x] Recover agent after user power cycle; pending read job 177 resolved with wait.
+- [x] Implement startup USB mode using verified OEM behavior; read-only native query and offline control/rollback tests pass.
+- [x] Prepare shell agent start/reconnect controls and delayed/retried startup.
+- [ ] Re-test saved YouTube Music default and Bluetooth after real power cycle.
+- User confirmed v0.3.0 and saved Music preference, but no app start/BT persistence; USB booted Mass Storage. Shell BT button reports launch failure. Exact keyed agent recovery path has been provided.
+- User's vendor USB changes/reset restored operation; native report confirmed Serial_Class / COM6.
+- [ ] Deploy shell 0.3.1 and the final agent pause-cancellation fix, then validate hardware mode switching and cold-power startup.
+- Paused overnight at the user's request. See docs/NEXT_SESSION.md for exact installed and prepared builds.

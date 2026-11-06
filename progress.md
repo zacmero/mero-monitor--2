@@ -39,3 +39,33 @@ Bluetooth live session: audio and AVRCP connected while on wall power. User hear
 2026-11-05: User reports native mero-bt.exe downloaded over Bluetooth and executed successfully by setting navigation path to the downloaded executable. This verifies USB-free native-app bootstrap. No current FTP session or test upload on PC at subsequent check; asked user to tap CONNECT/LIST, download proof and UPLOAD TEST to verify native client. No boot target or ResidentFlash files changed by agent.
 
 2026-11-05 VERIFIED MILESTONE: user confirmed all native mero-bt operations successful: CONNECT/LIST, proof download, UPLOAD TEST. Host independently verified exact42-byte upload and SHA256d9db6b662e742c86f31bc2a5a1d3fa590b6cad73ebd966f4c3646c4957aa61ce; FTP session4 active. User requested commit and push. Updating docs and validating complete source repair/Bluetooth milestone; OEM captures/private runtime/built binaries excluded.
+
+2026-11-05 agent feature: implemented per-device keyed build, HMAC-SHA256 command/reply protocol, monotonic durable job directories, cached results, bounded SD writes, staged SHA-verified installation with backups and rollback, read/list and named Mero process controls. Host CLI serializes callers and preserves timed-out pending jobs. Cross-language C/Python crypto and protocol checks plus pending/stale-result tests pass. Bootstrap published mero-agent.exe for a one-time download; user asked to run it. Live authenticated status/file tests pending. AGENTS.md records operating contract, original RTK/cloud SSH rules and safety boundaries. Key/header/keyed binary are private and excluded from Git.
+
+2026-11-05 AGENT VERIFIED: authenticated hardware status/list; remote file write/read/update/rollback with exact bytes; probe launch/log/stop(1); large ARM upload. Fixed oversized outbound truncation via256-byte socket writes/512-byte OBEX PUTs, cancelling only pending read15. Added hash-bound safe agent upgrade and upgraded live agent at same navigation path (SHA40f81...30c3), keeping old binary. Large9,728-byte round trip and4,218-byte log pull passed. Remotely deployed/read-back shell0.2.13, backup ref26, SHA43dc...9ca; launched it, user confirmed usable, agent still answered in background. Host FTP restart/reconnection status30 passed. Private bootstrap executable removed from share, no pending job remains, key/header remain private. Firmware, resident flash and boot configuration untouched. Power-loss recovery is not hardware-tested.
+
+2026-11-05 FINAL AGENT ACCEPTANCE: user confirmed remotely deployed shell visible and usable. Fresh authenticated status30 passed after host FTP restart; agent remains active in background. make, make check (companion, C/Python auth/path/transport/pending/cancel tests, OBEX codec), Python syntax and diff whitespace checks passed. Upgrade helper recovery branches now report rollback failure accurately; helper build checked. Key and keyed artifacts remain private; no pending job or public keyed bootstrap remains. Native firmware/boot/resident flash untouched. No Git commit/push requested for this new agent feature yet.
+
+### Useful companions — 2026-11-06
+- Added signed Bluetooth live snapshots and an in-RAM app mailbox; status job 40 verified increasing generations, age 2s, live weather and music.
+- Deployed/read-back verified the shell, weather terminal, music deck, gallery, tuner, camera, CMD, probe, Bluetooth client and read-only screenshot helper. Original app/config backups remain in agent job receipts.
+- Captured actual 480x272 weather and music screens. Weather showed current Farroupilha conditions and all three forecast days. Music showed Southside at 3:36 / 4:39, paused.
+- Native Play/Pause button -> RAM event -> signed Bluetooth upload -> PC MPRIS worked in both directions; bridge restart did not replay the acknowledged press. Test left playback paused; later user presses remain under user control.
+- Hardware standby test exposed gray OEM STATIC/SS_BLACKRECT rendering. Replaced it with a custom window that explicitly paints black; regression capture and disconnect-wake check are in progress.
+- Artwork now uses a 112x112 RGB565 single-entry RAM cache, verifies SHA256 before display, purges obsolete covers and clears buffers on close. PC conversion and native purge tests pass; final device capture is pending.
+- Final artwork capture (job 170) shows the matching Southside cover and real 3:59 / 4:39 timing. Native RAM-cache invalidation tests confirm previous pixels are zeroed on new-track receipt.
+- Black-screen regression now passes: native capture is entirely black; the agent stays reachable. After stopped updates the screen recovers and clearly marks the cached track offline. Services are active again.
+- Native default startup and close-to-shell captures passed (jobs 160/163); the temporary preference was rolled back and verified byte for byte (jobs 164/165). A physical cold-power check was requested separately.
+- Final agent hash: 0587e2b61f42a5d48e86cd68ebbd10b2e52d2d0e649f5811e4dfad8e900807b6. Status job 176 reports age 2s, live weather/music, 37 MB free RAM and unchanged resident-shell Launch50.
+- make, make check and diff whitespace checks passed. Seven hardware PNGs and a SHA256 manifest are retained under ~/.local/state/mero/foston-evidence/20261106/.
+- Session stopped at the user's request after cold-start recovery. The user
+  reported the default Music app working after vendor USB changes/reset;
+  authenticated status then confirmed fresh Bluetooth telemetry. A native
+  read-only report confirmed Serial_Class / COM6 and the OEM default query.
+- Installed agent was subsequently upgraded to
+  888efc5f3b6c7229cfaf0a1cb750efb37f646d56317a32891e1ce418481762c9,
+  including separate keyed-agent identity and initialization/reconnect support.
+- Shell 0.3.1, verified OEM USB control and the final explicit-pause cancellation
+  fix are built/tested but NOT deployed. No new USB mode writes were made by
+  this implementation. Detailed installed/candidate hashes and resume steps are
+  in docs/NEXT_SESSION.md. No device job was pending at shutdown.

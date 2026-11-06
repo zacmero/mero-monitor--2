@@ -1,5 +1,8 @@
 # Foston agent operating contract
 
+**Resume from [docs/NEXT_SESSION.md](docs/NEXT_SESSION.md).** It distinguishes
+installed/verified device builds from startup/USB fixes saved but not deployed.
+
 This repository controls the user's Foston FS-460BT, Windows CE 5.0 ARMv4I,
 480×272, 64 MB RAM. Read the current status in `docs/REPAIR.md` before hardware
 work. Bluetooth listing, download, executable bootstrap, and byte-exact upload
