@@ -2,7 +2,7 @@
 
 ## Status, 2026-11-05
 
-USB on mero-machine still fails descriptor negotiation before a storage device appears. Bluetooth is paired and connected. The OEM File Manager has opened the PC OBEX FTP service and the user successfully downloaded the proof file after switching the device from Mass Storage to ActiveSync/PC Link. Mass Storage had prevented WinCE from writing its own SD download destination despite no host mount. The user downloaded and executed native mero-bt.exe by setting the navigation path to the downloaded file. They confirmed CONNECT/LIST, proof download, and UPLOAD TEST all succeeded. The PC independently received the exact 42-byte expected upload. Shell 0.2.12 is built and shared, with a client fallback at SDMMC/BT; its updated launcher has not yet been physically tested. ResidentFlash and boot configuration remain untouched by current work.
+USB on mero-machine still fails descriptor negotiation before a storage device appears. Bluetooth is paired and connected. The OEM File Manager has opened the PC OBEX FTP service and the user successfully downloaded the proof file after switching the device from Mass Storage to ActiveSync/PC Link. Mass Storage had prevented WinCE from writing its own SD download destination despite no host mount. The user downloaded and executed native mero-bt.exe by setting the navigation path to the downloaded file. They confirmed CONNECT/LIST, proof download, and UPLOAD TEST all succeeded. The PC independently received the exact 42-byte expected upload. The signed agent workflow now runs in the background. Shell 0.2.13 was deployed and read back byte for byte over Bluetooth, then launched; the user confirmed it is visible and usable. ResidentFlash and boot configuration remain untouched by current work.
 
 The current source differed from the old handoff: its terminal had no TCP receiver and terminated `repllog.exe`/`rnaapp.exe` every second. Those processes own ActiveSync. The bridge also depended on a media player to service its connection. Both problems are fixed.
 
@@ -126,3 +126,66 @@ Keep the device OUT of Mass Storage during Bluetooth downloads: WinCE must own t
 User confirmed that the downloaded mero-bt.exe executed through the navigation path and that CONNECT/LIST, proof download and UPLOAD TEST all succeeded. PC received foston-bt-check.txt containing exactly the expected 42 bytes: MERO FOSTON BLUETOOTH FILE TRANSFER TEST followed by CRLF. SHA256 d9db6b662e742c86f31bc2a5a1d3fa590b6cad73ebd966f4c3646c4957aa61ce. A live server FTP session was present. This verifies the custom client end to end, with the upload payload checked byte for byte; the downloaded proof contents were user-confirmed as successfully saved but not independently hashed on the device.
 
 The USB-free bootstrap is now demonstrated: native File Manager downloads our executable, the navigation path launches it, and our app performs transfers using the existing OEM backend without returning to the vendor UI for each operation. Pairing remains native; arbitrary nested browsing and non-ASCII filenames are not implemented. Shell0.2.12 can launch the client directly from its initial BT download directory, preserving the installed Mero files and resident-flash recovery shell.
+
+## Agent-enabled device (2026-11-05)
+
+The repository now includes AGENTS.md and scripts/foston_agent.py. A keyed mero-agent.exe polls signed jobs over the verified outbound FTP link, preserves a durable sequence and cached receipts, and uploads authenticated results. The host serializes callers and verifies reply identity, operation, size and SHA256. Timeouts remain pending until wait resolves them; cancel-read is available only for nonmutating reads. Jobs are retired after acknowledgement and payloads archived outside the public share. Keys and generated build headers are local/private and ignored by Git.
+
+Implemented commands: status, ls, get, put, rollback, launch, stop, wait, cancel-read, bootstrap and upgrade. Reads cover SD/Windows/resident storage; writes are bounded to SD Mero/BT/Photos/Stream. App controls are limited to named Mero executables and protect the agent process. Ordinary writes cannot replace the running agent. Upgrade uses a separate helper bound to a complete plan hash, checks old/new executable hashes, preserves a backup and navigation path, restores on launch failure and verifies the reported running executable hash. It changes no ROM/boot registry settings.
+
+Live verification: authenticated status reported38MiB free RAM and6890MiB free SD initially. Jobs3–8 wrote a30-byte test file, read it back exactly, replaced it, then rolled it back and verified original bytes. Jobs9–13 backed up probe.txt, launched mero-probe.exe, retrieved its refreshed log and stopped exactly one probe process; agent stayed available. Job14 uploaded a9,728-byte ARM probe copy with validated PE/hash. The initial multipart return failed with truncated OBEX frames and the read-only job15 was explicitly cancelled; no mutation was replayed. Bounded256-byte writes and512-byte PUT PDUs fixed the path.
+
+The agent upgraded itself at SDMMC/BT/Downloads/101907-mero-agent.exe; running SHA25640f81babffdc16d5f609ac0e1cf5cf0e5d781226a9ba3531f78bf137605830c3 matched the candidate. Old agent preserved at SDMMC/BT/AgentUpdate/old-4329b0ea8b6554d7.exe. Job23 returned the probe copy with exact byte equality. Job24 retrieved a4,218-byte log. Job26 installed shell0.2.13 (58,368bytes), with its previous version preserved under agent job26. Job27 read it back and matched SHA25643dc068fefafb01ae36fe9908cd1230e3797a4e13bfe9bf864c6b226cc9e79ca. Job28 launched it; job29 proved background agent availability, and the user confirmed the shell is usable. Job30 authenticated successfully after restarting the host FTP service, confirming reconnect behavior.
+
+No forced power-loss test was performed. Recovery journals/backups are implemented, but hardware power interruption remains untested. Agent status can verify its own path/hash. Keep agent mode on and the device in ActiveSync/PC Link. After power loss, launch the configured navigation app if the existing boot setup does not do so automatically. Firmware, boot state and resident-flash recovery are outside this agent interface.
+# Live companions: hardware verification, 2026-11-06
+
+Shell 0.3.0 groups the app catalogue under **01 – Companion Labs** and provides
+an explicit **02 – Default App** picker. Weather, music, gallery and Frequency
+Matrix are on the first app page. Optional old visualizer/terminal entries are
+shown only when their executables exist. Existing app files and gallery settings
+were preserved.
+
+The host bridge now supplies weather, YouTube Music and cinema state through
+signed Bluetooth snapshots. The agent publishes telemetry in shared RAM; it does
+not create SD backups for each update. Weather animates locally and shows fetch
+age, forecast and offline/cache state. Music uses actual MPRIS timing and accepts
+controls only for an exact `music.youtube.com` session.
+
+Music artwork is one 112×112 RGB565 image in RAM, verified against the signed
+SHA256. The display buffer is reused. Obsolete artwork is cleared when new track
+metadata arrives; buffers are cleared when the app closes. There are no new SD
+artwork files. PC-side thumbnail caches are bounded to four files.
+
+Verified on the device:
+
+- All updated app binaries were backed up, transferred and read back byte for
+  byte over Bluetooth. The current agent remains at the same navigation path.
+- Screen captures show real Farroupilha weather and all three forecast days,
+  and the correct Southside thumbnail, title, artist, 3:59 / 4:39 and paused state.
+- The native Play/Pause button sent an authenticated event to the PC. Play and
+  pause both worked. Restarting the PC bridge did not repeat the acknowledged
+  toggle. Later user interaction remains under user control.
+- A temporary saved Weather default opened after a fresh shell countdown.
+  Closing it returned home and did not relaunch it. The previous preference was
+  restored byte for byte through the agent rollback operation.
+- A signed standby snapshot produced an all-black native screen capture while
+  the Bluetooth agent continued answering. With updates stopped, the screen
+  recovered and showed the cached/offline deck. Services were restored afterward.
+
+The standby test exposed an OEM quirk: `STATIC` with `SS_BLACKRECT` painted gray.
+The shared client now uses a window that explicitly paints black. This is
+software blanking; it does not claim hardware suspend or backlight power-off.
+
+Read-only boot inspection found Launch50 pointing at
+`\ResidentFlash\MERO\mero-shell.exe`. The resident executable contains the SD
+shell handoff path. The updated SD shell starts the existing provisioned agent
+from `SDMMC/MERO/agent.cfg` in the background. No boot-registry values or resident
+recovery binaries were written. A physical cold-power test remains separate from
+the verified shell restart/default-app test.
+
+Hardware PNGs and their SHA256 manifest are stored outside Git at
+`~/.local/state/mero/foston-evidence/20261106/`. Reproduce a capture with the
+read-only `mero-screen.exe` helper and `scripts/foston_screen.py`.
+
+Ideas retained for later work: [Companion roadmap](COMPANION_ROADMAP.md).

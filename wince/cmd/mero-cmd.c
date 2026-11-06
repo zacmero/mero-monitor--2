@@ -5,11 +5,14 @@
  */
 
 #define WIN32_LEAN_AND_MEAN
+#include <winsock2.h>
 #include <windows.h>
 #include <tlhelp32.h>
 #include <tchar.h>
 #include <stdio.h>
 #include <string.h>
+#include "../mero-shell-return.h"
+#include "../mero-live.h"
 
 #define CMD_VERSION         L"0.1.4"
 #define MAX_LINES           120
@@ -268,166 +271,31 @@ static void CmdWinList(void)
 }
 
 /* Universal fullscreen suppressor: hides ANY window covering the screen that isn't shell or desktop */
-static BOOL CALLBACK CmdKillAnyVendorWindowProc(HWND hWnd, LPARAM lParam)
+/* Preserve the Bluetooth backend and custom apps when exposing the desktop. */
+static BOOL CALLBACK CmdKillAnyVendorWindowProc(HWND window, LPARAM value)
 {
-    int *count = (int*)lParam;
-    if (hWnd == g_hWnd) return TRUE;
-
-    WCHAR cls[64];
-    cls[0] = 0;
-    GetClassNameW(hWnd, cls, sizeof(cls)/sizeof(cls[0]));
-
-    if (_wcsicmp(cls, L"HHTaskBar") == 0 ||
-        _wcsicmp(cls, L"DesktopExplorerWindow") == 0) {
-        return TRUE;
-    }
-
-    RECT rc;
-    GetWindowRect(hWnd, &rc);
-    int w = rc.right - rc.left;
-    int h = rc.bottom - rc.top;
-
-    if (w >= 400 && h >= 200) {
-        DWORD pid = 0;
-        GetWindowThreadProcessId(hWnd, &pid);
-        if (pid == GetCurrentProcessId()) return TRUE;
-
-        ShowWindow(hWnd, SW_HIDE);
-        SetWindowPos(hWnd, HWND_BOTTOM, -2000, -2000, 10, 10, SWP_HIDEWINDOW | SWP_NOACTIVATE);
-        EnableWindow(hWnd, FALSE);
-        PostMessage(hWnd, WM_CLOSE, 0, 0);
-
-        WCHAR procName[64];
-        procName[0] = 0;
-        HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-        if (hSnap != INVALID_HANDLE_VALUE) {
-            PROCESSENTRY32 pe;
-            pe.dwSize = sizeof(pe);
-            if (Process32First(hSnap, &pe)) {
-                do {
-                    if (pe.th32ProcessID == pid) {
-                        wcsncpy(procName, pe.szExeFile, 63);
-                        break;
-                    }
-                } while (Process32Next(hSnap, &pe));
-            }
-            CloseHandle(hSnap);
-        }
-
-        WCHAR line[128];
-        if (_wcsicmp(procName, L"nk.exe") != 0 &&
-            _wcsicmp(procName, L"gwes.exe") != 0 &&
-            _wcsicmp(procName, L"device.exe") != 0 &&
-            _wcsicmp(procName, L"filesys.exe") != 0 &&
-            _wcsicmp(procName, L"services.exe") != 0 &&
-            _wcsicmp(procName, L"explorer.exe") != 0 &&
-            _wcsicmp(procName, L"mero-shell.exe") != 0 &&
-            _wcsicmp(procName, L"mero-cmd.exe") != 0) {
-            
-            HANDLE hProc = OpenProcess(0x0001 /* PROCESS_TERMINATE */, FALSE, pid);
-            if (hProc) {
-                TerminateProcess(hProc, 0);
-                CloseHandle(hProc);
-                wsprintfW(line, L"[KILL] Terminated %s (PID 0x%08X)", procName, pid);
-            } else {
-                wsprintfW(line, L"[KILL] Hid %s window (PID 0x%08X)", procName, pid);
-            }
-        } else {
-            wsprintfW(line, L"[KILL] Hid fullscreen window (Class: %s)", cls);
-        }
-        TermPrint(line);
-        (*count)++;
+    WCHAR cls[96],title[96];int *count=(int*)value;
+    if(window==g_hWnd)return TRUE;
+    GetClassNameW(window,cls,96);GetWindowTextW(window,title,96);
+    if(!_wcsicmp(cls,L"Launch")||!_wcsicmp(cls,L"Main")||!_wcsicmp(title,L"Launch")||!_wcsicmp(title,L"ANWWATCHDOG")){
+        ShowWindow(window,SW_HIDE);(*count)++;
     }
     return TRUE;
 }
-
 static void CmdUniversalKill(void)
 {
-    int count = 0;
-    TermPrint(L"[KILL] Scanning for vendor UI windows & watchdogs...");
-
-    /* 1. Hide vendor windows & dialogs */
-    HWND hWndVendor = FindWindowW(NULL, L"Launch");
-    if (!hWndVendor) hWndVendor = FindWindowW(L"Launch", NULL);
-    if (!hWndVendor) hWndVendor = FindWindowW(NULL, L"Main");
-    if (!hWndVendor) hWndVendor = FindWindowW(L"Main", NULL);
-    if (hWndVendor) {
-        ShowWindow(hWndVendor, SW_HIDE);
-        EnableWindow(hWndVendor, FALSE);
-        count++;
-    }
-
-    HWND hWndDog = FindWindowW(NULL, L"ANWWATCHDOG");
-    if (hWndDog) {
-        ShowWindow(hWndDog, SW_HIDE);
-        EnableWindow(hWndDog, FALSE);
-        count++;
-    }
-
-    HWND hWndPhone = FindWindowW(NULL, L"ANW_PHONELINK");
-    if (hWndPhone) {
-        ShowWindow(hWndPhone, SW_HIDE);
-        EnableWindow(hWndPhone, FALSE);
-        count++;
-    }
-
-    /* 2. Universal fullscreen window sweep */
-    EnumWindows(CmdKillAnyVendorWindowProc, (LPARAM)&count);
-
-    /* 3. Process table sweep for Watchdog & Launchers */
-    HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    if (hSnap != INVALID_HANDLE_VALUE) {
-        PROCESSENTRY32 pe;
-        pe.dwSize = sizeof(pe);
-        if (Process32First(hSnap, &pe)) {
-            do {
-                if (_wcsicmp(pe.szExeFile, L"ANWDOG.exe") == 0 ||
-                    _wcsicmp(pe.szExeFile, L"PhoneLink.exe") == 0 ||
-                    _wcsicmp(pe.szExeFile, L"Launch.exe") == 0 ||
-                    _wcsicmp(pe.szExeFile, L"Main.exe") == 0 ||
-                    _wcsicmp(pe.szExeFile, L"YFMenu.exe") == 0) {
-                    
-                    HANDLE hProc = OpenProcess(0x0001, FALSE, pe.th32ProcessID);
-                    if (hProc) {
-                        TerminateProcess(hProc, 0);
-                        CloseHandle(hProc);
-                        WCHAR line[128];
-                        wsprintfW(line, L"[KILL] Terminated %s (PID 0x%08X)", pe.szExeFile, pe.th32ProcessID);
-                        TermPrint(line);
-                        count++;
-                    }
-                }
-            } while (Process32Next(hSnap, &pe));
-        }
-        CloseHandle(hSnap);
-    }
-
-    if (count == 0) {
-        TermPrint(L"[KILL] No active vendor windows or processes found");
-    } else {
-        WCHAR line[64];
-        wsprintfW(line, L"[KILL] Suppressed %d vendor components!", count);
-        TermPrint(line);
-    }
-    CmdWinList();
+    int count=0;EnumWindows(CmdKillAnyVendorWindowProc,(LPARAM)&count);
+    TermPrint(L"[UI] Vendor windows hidden. Bluetooth and Mero apps preserved.");
 }
 
-/* Create desktop shortcut (.lnk) files on Windows CE desktop */
 static void CreateDesktopShortcuts(void)
 {
     HANDLE hFile;
     DWORD written;
-    const char *lnkShell = "34#\\ResidentFlash\\MERO\\mero-flash.exe";
-    const char *lnkCmd   = "32#\\ResidentFlash\\MERO\\mero-cmd.exe";
-    const char *lnkFlash = "34#\\ResidentFlash\\MERO\\mero-flash.exe";
+    const char *lnkShell = "26#\\SDMMC\\MERO\\mero-shell.exe";
+    const char *lnkCmd   = "24#\\SDMMC\\MERO\\mero-cmd.exe";
+    const char *lnkFlash = "26#\\SDMMC\\MERO\\mero-shell.exe";
 
-    CreateDirectoryW(L"\\ResidentFlash\\MERO", NULL);
-    CopyFileW(L"\\SDMMC\\MERO\\mero-shell.exe", L"\\ResidentFlash\\MERO\\mero-shell.exe", FALSE);
-    CopyFileW(L"\\SDMMC\\MERO\\mero-cmd.exe", L"\\ResidentFlash\\MERO\\mero-cmd.exe", FALSE);
-    CopyFileW(L"\\SDMMC\\MERO\\mero-flash.exe", L"\\ResidentFlash\\MERO\\mero-flash.exe", FALSE);
-    CopyFileW(L"\\SDMMC\\MERO\\mero-shell.ico", L"\\ResidentFlash\\MERO\\mero-shell.ico", FALSE);
-    CopyFileW(L"\\SDMMC\\MERO\\mero-cmd.ico", L"\\ResidentFlash\\MERO\\mero-cmd.ico", FALSE);
-    CopyFileW(L"\\SDMMC\\MERO\\mero-flash.ico", L"\\ResidentFlash\\MERO\\mero-flash.ico", FALSE);
 
     CreateDirectoryW(L"\\Windows\\Desktop", NULL);
 
@@ -911,20 +779,7 @@ static void HandleCommand(int cmdId)
         TermClear();
         break;
     case CMD_ID_EXIT:
-        {
-            PROCESS_INFORMATION pi;
-            memset(&pi, 0, sizeof(pi));
-            /* Relaunch Mero Shell so device returns to cybernetic shell */
-            if (!CreateProcessW(L"\\ResidentFlash\\MERO\\mero-shell.exe", NULL, NULL, NULL, FALSE, 0, NULL, NULL, NULL, &pi)) {
-                CreateProcessW(L"\\SDMMC\\MERO\\mero-shell.exe", NULL, NULL, NULL, FALSE, 0, NULL, NULL, NULL, &pi);
-            }
-            if (pi.hProcess) {
-                CloseHandle(pi.hProcess);
-                CloseHandle(pi.hThread);
-            }
-            DestroyWindow(g_hWnd);
-        }
-        break;
+        MeroReturnToShell();DestroyWindow(g_hWnd);break;
     case CMD_ID_SCROLL_UP:
         if (g_scrollOffset > 0) {
             g_scrollOffset -= 3;
@@ -961,11 +816,15 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
 {
     switch (uMsg) {
     case WM_CREATE:
+        MeroLiveInit(hWnd,NULL);
         g_hWnd = hWnd;
         InitDockButtons();
         TermClear();
         return 0;
 
+    case WM_TIMER:
+        if(wParam==MERO_LIVE_TIMER)MeroLiveTick(hWnd);
+        return 0;
     case WM_LBUTTONDOWN:
         OnTouch(LOWORD(lParam), HIWORD(lParam));
         return 0;
@@ -977,7 +836,10 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         OnPaint(hWnd);
         return 0;
 
+    case WM_CLOSE:
+        MeroReturnToShell();DestroyWindow(hWnd);return 0;
     case WM_DESTROY:
+        MeroLiveClose(hWnd);
         PostQuitMessage(0);
         return 0;
     }

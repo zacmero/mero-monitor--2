@@ -23,6 +23,7 @@
 #define STBI_ONLY_JPEG
 #include "stb_image.h"
 #include "suzy_sample.h"
+#include "../mero-shell-return.h"
 
 #define TUNER_VERSION       L"0.2.0"
 #define CFG_DIR             L"\\SDMMC\\MERO"
@@ -574,23 +575,7 @@ static void OnTouch(int x, int y)
                 break;
 
             case BTN_EXIT:
-                {
-                    PROCESS_INFORMATION pi;
-                    memset(&pi, 0, sizeof(pi));
-                    BOOL ok = CreateProcessW(PATH_SHELL_SD, NULL, NULL, NULL, FALSE, 0, NULL, NULL, NULL, &pi);
-                    if (!ok) {
-                        ok = CreateProcessW(PATH_SHELL_FLASH, NULL, NULL, NULL, FALSE, 0, NULL, NULL, NULL, &pi);
-                    }
-                    if (ok) {
-                        CloseHandle(pi.hProcess);
-                        CloseHandle(pi.hThread);
-                        DestroyWindow(g_hWnd);
-                        return;
-                    } else {
-                        wsprintfW(g_statusMsg, L"ERR // Shell binary not found in SDMMC or Flash");
-                    }
-                }
-                break;
+                MeroReturnToShell();DestroyWindow(g_hWnd);return;
             }
 
             InvalidateRect(g_hWnd, NULL, FALSE);
@@ -654,6 +639,8 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         OnPaint(hWnd);
         return 0;
 
+    case WM_CLOSE:
+        MeroReturnToShell();DestroyWindow(hWnd);return 0;
     case WM_DESTROY:
         MeroLiveClose(hWnd);
         if (g_prevDC && g_hOldPrev) SelectObject(g_prevDC, g_hOldPrev);

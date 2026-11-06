@@ -27,6 +27,7 @@
 #define STBI_NO_LINEAR
 #define STBI_ONLY_JPEG
 #include "stb_image.h"
+#include "../mero-shell-return.h"
 
 #define SCREEN_W        480
 #define SCREEN_H        272
@@ -439,7 +440,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
 
                     if (strcmp(g_buttons[i].cmd, "EXIT") == 0) {
                         SendCamCommand("STOP");
-                        PostQuitMessage(0);
+                        MeroReturnToShell();DestroyWindow(hWnd);
                         return 0;
                     }
                     SendCamCommand(g_buttons[i].cmd);
@@ -468,6 +469,8 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
         }
         return 0;
 
+    case WM_CLOSE:
+        MeroReturnToShell();DestroyWindow(hWnd);return 0;
     case WM_DESTROY:
         MeroLiveClose(hWnd);
         KillTimer(hWnd, TIMER_POLL);

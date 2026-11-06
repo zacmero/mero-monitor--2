@@ -2,6 +2,7 @@
 #ifndef MERO_LIVE_H
 #define MERO_LIVE_H
 #include <winsock2.h>
+#include "mero-bus.h"
 #define MERO_LIVE_TIMER 99
 static SOCKET mero_socket = INVALID_SOCKET;
 static BOOL mero_connecting = FALSE, mero_standby = FALSE;
@@ -10,6 +11,7 @@ static char mero_rx[8192];
 static int mero_rx_len = 0;
 static HWND mero_blank = NULL;
 static void (*mero_line_handler)(char *) = NULL;
+static DWORD mero_bus_generation;
 
 static void MeroLiveDisconnect(void)
 {
@@ -19,16 +21,37 @@ static void MeroLiveDisconnect(void)
     mero_rx_len = 0;
 }
 
+static LRESULT CALLBACK MeroBlankProc(HWND h, UINT message, WPARAM w, LPARAM l)
+{
+    if (message == WM_PAINT) {
+        PAINTSTRUCT paint; RECT area;
+        HDC dc = BeginPaint(h, &paint);
+        GetClientRect(h, &area);
+        FillRect(dc, &area, (HBRUSH)GetStockObject(BLACK_BRUSH));
+        EndPaint(h, &paint);
+        return 0;
+    }
+    if (message == WM_ERASEBKGND) return 1;
+    return DefWindowProcW(h, message, w, l);
+}
 static void MeroLiveStandby(HWND owner, BOOL standby)
 {
     if (mero_standby == standby) return;
     mero_standby = standby;
     if (standby) {
-        if (!mero_blank)
-            mero_blank = CreateWindowExW(WS_EX_TOPMOST, L"STATIC", L"",
-                WS_POPUP | SS_BLACKRECT, 0, 0, GetSystemMetrics(SM_CXSCREEN),
+        if (!mero_blank) {
+            WNDCLASSW cls;
+            memset(&cls, 0, sizeof(cls));
+            cls.lpfnWndProc = MeroBlankProc;
+            cls.hInstance = GetModuleHandleW(NULL);
+            cls.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
+            cls.lpszClassName = L"MERO_STANDBY_BLACK_V1";
+            RegisterClassW(&cls);
+            mero_blank = CreateWindowExW(WS_EX_TOPMOST, cls.lpszClassName, L"",
+                WS_POPUP, 0, 0, GetSystemMetrics(SM_CXSCREEN),
                 GetSystemMetrics(SM_CYSCREEN), owner, NULL,
                 GetModuleHandleW(NULL), NULL);
+        }
         if (mero_blank) ShowWindow(mero_blank, SW_SHOW);
         else mero_standby = FALSE;
     } else {
@@ -40,6 +63,27 @@ static void MeroLiveStandby(HWND owner, BOOL standby)
 static void MeroLiveTick(HWND owner)
 {
     DWORD now = GetTickCount();
+    char shared[MERO_BUS_BYTES];
+    shared[0] = 0;
+    if (MeroBusLock()) {
+        if (mero_bus->generation != mero_bus_generation &&
+            (DWORD)(now - mero_bus->tick) < 15000) {
+            mero_bus_generation = mero_bus->generation;
+            memcpy(shared, mero_bus->lines, sizeof(shared)); shared[sizeof(shared)-1] = 0;
+            mero_received = now;
+        }
+        ReleaseMutex(mero_bus_mutex);
+    }
+    if (shared[0]) {
+        char *line = shared, *end;
+        while ((end = strchr(line, '\n')) != NULL) {
+            *end = 0;
+            if (!strcmp(line, "MERO:POWER:standby=1")) MeroLiveStandby(owner, TRUE);
+            else if (!strcmp(line, "MERO:POWER:standby=0")) MeroLiveStandby(owner, FALSE);
+            else if (mero_line_handler) mero_line_handler(line);
+            line = end + 1;
+        }
+    }
     if (mero_standby && (DWORD)(now - mero_received) > 15000)
         MeroLiveStandby(owner, FALSE);
     if (mero_socket == INVALID_SOCKET) {
@@ -110,6 +154,7 @@ static void MeroLiveInit(HWND owner, void (*handler)(char *))
 {
     WSADATA data;
     mero_line_handler = handler;
+    MeroBusOpen();
     if (WSAStartup(MAKEWORD(2, 0), &data) == 0)
         SetTimer(owner, MERO_LIVE_TIMER, 500, NULL);
 }
@@ -120,6 +165,7 @@ static void MeroLiveClose(HWND owner)
     MeroLiveDisconnect();
     if (mero_blank) DestroyWindow(mero_blank);
     mero_blank = NULL;
+    MeroBusClose();
     WSACleanup();
 }
 #endif

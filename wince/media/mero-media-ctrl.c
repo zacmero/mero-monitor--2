@@ -21,6 +21,7 @@
 #include <string.h>
 #include "../mero-live.h"
 #include <math.h>
+#include "../mero-shell-return.h"
 
 #define DECK_VERSION        L"3.0.0"
 #define TIMER_ID_FRAME      1    /* 50ms = 20 FPS for silky radar & waveform animations */
@@ -1282,12 +1283,17 @@ static void PaintFmView(HDC hdc)
  * ==================================================================== */
 static void DrawWeatherGlyph(HDC hdc, int x, int y, int w, int h, const WCHAR *cond)
 {
+    WCHAR normalized[96]; int ci;
+    lstrcpynW(normalized, cond, 96);
+    for (ci=0; normalized[ci]; ci++) if (normalized[ci]>=L'A' && normalized[ci]<=L'Z') normalized[ci] += L'a'-L'A';
+    cond = normalized;
+
     RECT glyphBox = { x, y, x + w, y + h };
     FillRect(hdc, &glyphBox, (HBRUSH)GetStockObject(BLACK_BRUSH));
-    int cx = x + w / 2;
+    int cx = x + w / 2 + (int)(4 * sin(g_frameTick * 0.035));
     int cy = y + h / 2;
 
-    if (wcsstr(cond, L"Rain") || wcsstr(cond, L"Shower") || wcsstr(cond, L"Drizzle")) {
+    if (wcsstr(cond, L"rain") || wcsstr(cond, L"shower") || wcsstr(cond, L"drizzle") || wcsstr(cond, L"thunder")) {
         HBRUSH hCloudBr = CreateSolidBrush(RGB(10, 26, 36));
         HBRUSH hOldBr = (HBRUSH)SelectObject(hdc, hCloudBr);
         HPEN hCloudPen = CreatePen(PS_SOLID, 2, RGB(0, 200, 255));
@@ -1302,13 +1308,14 @@ static void DrawWeatherGlyph(HDC hdc, int x, int y, int w, int h, const WCHAR *c
         SelectObject(hdc, hRainPen);
         int rx;
         for (rx = -30; rx <= 30; rx += 15) {
-            MoveToEx(hdc, cx + rx, cy + 20, NULL);
-            LineTo(hdc, cx + rx - 8, cy + 32);
+            int drop = (g_frameTick * 2 + rx + 30) % 22;
+            MoveToEx(hdc, cx + rx, cy + 14 + drop, NULL);
+            LineTo(hdc, cx + rx - 7, cy + 24 + drop);
         }
         SelectObject(hdc, hOldP);
         DeleteObject(hRainPen);
         DeleteObject(hCloudPen);
-    } else if (wcsstr(cond, L"Cloud") || wcsstr(cond, L"Overcast") || wcsstr(cond, L"Mist")) {
+    } else if (wcsstr(cond, L"cloud") || wcsstr(cond, L"overcast") || wcsstr(cond, L"mist") || wcsstr(cond, L"fog")) {
         HBRUSH hBr = CreateSolidBrush(RGB(8, 26, 20));
         HBRUSH hOldBr = (HBRUSH)SelectObject(hdc, hBr);
         HPEN hPen = CreatePen(PS_SOLID, 2, RGB(0, 255, 160));
@@ -1347,12 +1354,24 @@ static void DrawWeatherGlyph(HDC hdc, int x, int y, int w, int h, const WCHAR *c
 
 static void PaintWeatherView(HDC memDC)
 {
-    RECT status = { 10, 220, 185, 238 };
-    BOOL stale = !g_wxFromHost || g_wxAge > 1200 || (DWORD)(GetTickCount() - g_wxReceivedTick) > 15000;
+    RECT status = { 10, 219, 194, 232 }, freshness = { 10, 233, 194, 247 };
+    DWORD elapsed = (DWORD)(GetTickCount() - g_wxReceivedTick) / 1000;
+    int age = g_wxAge + (int)elapsed;
+    BOOL linked = g_wxFromHost && elapsed <= 15;
+    BOOL stale = !linked || age > 1200;
+    WCHAR ageText[64];
     SetTextColor(memDC, stale ? RGB(255, 180, 0) : RGB(0, 255, 128));
-    DrawTextW(memDC, !g_wxHaveData ? L"NO DATA // USB SYNC" :
-              stale ? L"WEATHER: CACHED" : L"HOST WEATHER: LIVE", -1, &status, DT_LEFT | DT_SINGLELINE);
-    if (!g_wxHaveData) return;
+    DrawTextW(memDC, !g_wxHaveData ? L"WAITING FOR PC WEATHER" : !linked ? L"OFFLINE // CACHED" : stale ? L"LINK OK // OLD WEATHER" : L"BLUETOOTH // LIVE", -1, &status, DT_LEFT | DT_SINGLELINE);
+    if (!g_wxHaveData) {
+        RECT hint = { 18, 70, 455, 190 };
+        DrawTextW(memDC, L"Keep AGENT ON and the PC weather bridge running.\nFresh conditions and a three-day forecast will appear here.", -1, &hint, DT_CENTER | DT_WORDBREAK);
+        return;
+    }
+    if (!g_wxFromHost) lstrcpyW(ageText,L"FETCH AGE UNKNOWN");
+    else if (age < 60) wsprintfW(ageText,L"FETCHED %ds AGO",age);
+    else if (age < 3600) wsprintfW(ageText,L"FETCHED %dm AGO",age/60);
+    else wsprintfW(ageText,L"FETCHED %dh %dm AGO",age/3600,(age/60)%60);
+    DrawTextW(memDC,ageText,-1,&freshness,DT_LEFT|DT_SINGLELINE);
 
     WCHAR buf[128];
     int leftX = 10;
@@ -1448,7 +1467,7 @@ static void PaintWeatherView(HDC memDC)
     /* UV */
     SetTextColor(memDC, RGB(100, 150, 140));
     ExtTextOutW(memDC, rightX, 96, 0, NULL, L"UV INDEX:", 9, NULL);
-    wsprintfW(buf, L"%d [LOW]", g_wxUV);
+    wsprintfW(buf, L"%d [%s]", g_wxUV, g_wxUV < 3 ? L"LOW" : g_wxUV < 6 ? L"MODERATE" : g_wxUV < 8 ? L"HIGH" : L"VERY HIGH");
     SetTextColor(memDC, RGB(255, 215, 0));
     ExtTextOutW(memDC, rightX + 65, 96, 0, NULL, buf, lstrlenW(buf), NULL);
 
@@ -1585,16 +1604,8 @@ static void OnPaint(HWND hWnd)
 static void OnTouch(int x, int y)
 {
     /* Exit Button touched -> return to mero-shell */
-    if (x >= 435 && y <= 28) {
-        PROCESS_INFORMATION pi;
-        memset(&pi, 0, sizeof(pi));
-        if (!CreateProcessW(PATH_SHELL, NULL, NULL, NULL, FALSE, 0, NULL, NULL, NULL, &pi)) {
-            CreateProcessW(L"\\ResidentFlash\\MERO\\mero-shell.exe", NULL, NULL, NULL, FALSE, 0, NULL, NULL, NULL, &pi);
-        }
-        if (pi.hProcess) {
-            CloseHandle(pi.hProcess);
-            CloseHandle(pi.hThread);
-        }
+    if (x >= 415 && y <= 32) {
+        MeroReturnToShell();
         DestroyWindow(g_hWnd);
         return;
     }
@@ -1675,6 +1686,9 @@ static void OnTouch(int x, int y)
 
 static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
+    if(uMsg==RegisterWindowMessageW(L"MERO_SENSOR_VIEW_V1") && wParam<VIEW_COUNT) {
+        g_currentView=(DeckView)wParam;InvalidateRect(hWnd,NULL,FALSE);return 0;
+    }
     switch (uMsg) {
     case WM_CREATE:
         MeroLiveInit(hWnd, HandleHostLine);
@@ -1727,6 +1741,8 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         OnPaint(hWnd);
         return 0;
 
+    case WM_CLOSE:
+        MeroReturnToShell();DestroyWindow(hWnd);return 0;
     case WM_DESTROY:
         MeroLiveClose(hWnd);
         KillTimer(hWnd, TIMER_ID_FRAME);
@@ -1744,14 +1760,16 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nShowCmd)
 {
-    (void)hPrevInstance;
-    (void)lpCmdLine;
-    (void)nShowCmd;
+    (void)hPrevInstance; (void)nShowCmd;
+    if (lpCmdLine && wcsstr(lpCmdLine,L"--weather")) g_currentView = VIEW_WEATHER;
+    else if (lpCmdLine && wcsstr(lpCmdLine,L"--fm")) g_currentView = VIEW_FM;
+    else if (lpCmdLine && wcsstr(lpCmdLine,L"--gps")) g_currentView = VIEW_GPS;
 
     g_hInstance = hInstance;
 
     HWND hExisting = FindWindowW(L"MERO_COMPANION_DECK", NULL);
     if (hExisting) {
+        PostMessageW(hExisting,RegisterWindowMessageW(L"MERO_SENSOR_VIEW_V1"),g_currentView,0);
         SetForegroundWindow(hExisting);
         return 0;
     }

@@ -34,10 +34,12 @@ def deploy(mount):
         ["findmnt", "-n", "-o", "UUID", "--target", str(mount)], text=True).strip()
     if detected.upper() != UUID:
         raise SystemExit(f"Refusing unknown filesystem UUID {detected!r}")
-    sources = sorted((ROOT / "wince").glob("*/*.exe"))
-    required = {"mero-shell.exe", "mero-gallery.exe", "mero-media-ctrl.exe", "mero-tuner.exe", "mero-cam.exe", "mero-flash.exe", "mero-bt.exe"}
+    allowed = {"mero-shell.exe", "mero-gallery.exe", "mero-media-ctrl.exe", "mero-tuner.exe", "mero-cam.exe", "mero-flash.exe", "mero-bt.exe", "mero-music.exe", "mero-cmd.exe", "mero-probe.exe", "mero-screen.exe"}
+    # Never collect keyed agent/update binaries from an indiscriminate glob.
+    sources = sorted(p for p in (ROOT / "wince").glob("*/*.exe") if p.name in allowed)
+    required = {"mero-shell.exe", "mero-gallery.exe", "mero-media-ctrl.exe", "mero-tuner.exe", "mero-cam.exe", "mero-flash.exe", "mero-bt.exe", "mero-music.exe"}
     if not required.issubset({source.name for source in sources}):
-        raise SystemExit("Build shell, gallery, media, tuner, cam, flash, and Bluetooth before deploying")
+        raise SystemExit("Build shell, gallery, media, tuner, cam, flash, Bluetooth and music before deploying")
     for source in sources:
         verify_binary(source)
     stamp = time.strftime("%Y%m%d-%H%M%S") + f"-{os.getpid()}"

@@ -14,3 +14,7 @@ probe.txt
 __pycache__/
 *.o
 
+# Per-device agent secret; generate through foston_agent.py bootstrap.
+/wince/bluetooth/mero-agent-key.h
+/wince/bluetooth/mero-upgrade-plan.h
+

@@ -13,8 +13,10 @@
 #include <stdio.h>
 #include <string.h>
 #include "../mero-live.h"
+#include "../mero-agent-start.h"
+#include "../mero-usb.h"
 
-#define SHELL_VERSION       L"0.2.12"
+#define SHELL_VERSION       L"0.3.1"
 #define TIMER_ID_TICK       1
 
 #define IOCTL_HAL_REBOOT    0x0001003C
@@ -67,18 +69,42 @@ typedef enum {
     AUTOLAUNCH_CAM      = 4,
     AUTOLAUNCH_CMD      = 5,
     AUTOLAUNCH_PROBE    = 6,
-    AUTOLAUNCH_COUNT    = 7
+    AUTOLAUNCH_WEATHER  = 7,
+    AUTOLAUNCH_MUSIC    = 8,
+    AUTOLAUNCH_FM       = 9,
+    AUTOLAUNCH_GPS      = 10,
+    AUTOLAUNCH_BT       = 11,
+    AUTOLAUNCH_VIS      = 12,
+    AUTOLAUNCH_TERMINAL = 13,
+    AUTOLAUNCH_NAV      = 14,
+    AUTOLAUNCH_COUNT    = 15
 } AutoLaunchPref;
 
-static const WCHAR *g_prefNames[] = {
-    L"NONE (Direct Shell)",
-    L"mero-gallery.exe",
-    L"mero-media-ctrl.exe",
-    L"mero-tuner.exe",
-    L"mero-cam.exe",
-    L"mero-cmd.exe",
-    L"mero-probe.exe"
+typedef struct { const WCHAR *name, *path, *args, *description; } CompanionApp;
+static const CompanionApp g_apps[AUTOLAUNCH_COUNT] = {
+    {L"Mero Shell",NULL,NULL,L"No automatic app"},
+    {L"Adaptive Gallery",PATH_GALLERY,NULL,L"Folder profiles, fit and motion"},
+    {L"Sensor Terminal",PATH_MEDIA_CTRL,NULL,L"Clock, GPS, FM and weather"},
+    {L"Display Tuner",PATH_TUNER,NULL,L"Screen, color and backlight"},
+    {L"Camera Monitor",PATH_CAM,NULL,L"Existing camera bridge"},
+    {L"Mero CMD",PATH_CMD,NULL,L"Files and process diagnostics"},
+    {L"System Probe",PATH_PROBE,NULL,L"Hardware diagnostics"},
+    {L"Weather Window",PATH_MEDIA_CTRL,L"--weather",L"Live weather and forecast"},
+    {L"YouTube Music",L"\\SDMMC\\MERO\\mero-music.exe",NULL,L"Track, progress and PC controls"},
+    {L"Frequency Matrix",PATH_MEDIA_CTRL,L"--fm",L"Ambient audio and live waveform"},
+    {L"GPS Radar",PATH_MEDIA_CTRL,L"--gps",L"Native GPS; needs sky visibility"},
+    {L"Bluetooth Files",PATH_BT,NULL,L"Files and agent connection"},
+    {L"Audio Visualizer",PATH_VIS,NULL,L"Optional existing application"},
+    {L"Terminal",PATH_TERMINAL,NULL,L"Optional existing application"},
+    {L"iGO Navigation",PATH_IGO8,NULL,L"Existing navigation application"}
 };
+static const int g_appOrder[] = {7,8,1,9,2,10,11,3,4,5,6,12,13,14};
+static int g_appPage;
+static BOOL g_selectDefault, g_returningHome;
+static DWORD g_bootStarted,g_agentAttempt,g_usbAttempt;
+static BOOL g_usbStartupReady;
+static BOOL g_sdPrefsLoaded,g_allowBootReload=TRUE;
+static int g_launchAttempts;
 
 typedef enum {
     USB_MODE_MASS_STORAGE = 0,
@@ -144,97 +170,41 @@ static void SetMasterVolume(int level)
 /* Read shell configuration */
 static void LoadConfig(void)
 {
-    HANDLE hFile;
-    DWORD bytesRead;
-    char buffer[256];
-
-    g_pref = AUTOLAUNCH_NONE;
-    g_countdownSeconds = 0;
-    g_countdownActive = FALSE;
-
-    hFile = CreateFileW(CFG_FILE, GENERIC_READ, FILE_SHARE_READ, NULL,
-                        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (hFile == INVALID_HANDLE_VALUE) {
-        hFile = CreateFileW(L"\\ResidentFlash\\MERO\\shell.cfg", GENERIC_READ, FILE_SHARE_READ, NULL,
-                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    HANDLE f; DWORD n; char buffer[256]; BOOL found=FALSE;
+    g_pref=AUTOLAUNCH_NONE; g_countdownSeconds=0; g_countdownActive=FALSE;
+    f=CreateFileW(CFG_FILE,GENERIC_READ,FILE_SHARE_READ,NULL,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,NULL);
+    g_sdPrefsLoaded=(f!=INVALID_HANDLE_VALUE);
+    if(f==INVALID_HANDLE_VALUE)f=CreateFileW(L"\\ResidentFlash\\MERO\\shell.cfg",GENERIC_READ,FILE_SHARE_READ,NULL,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,NULL);
+    if(f!=INVALID_HANDLE_VALUE){
+        int val; found=TRUE; memset(buffer,0,sizeof(buffer));
+        if(ReadFile(f,buffer,sizeof(buffer)-1,&n,NULL)&&n&&sscanf(buffer,"autolaunch=%d",&val)==1&&val>=0&&val<AUTOLAUNCH_COUNT)g_pref=(AutoLaunchPref)val;
+        CloseHandle(f);
     }
-
-    if (hFile != INVALID_HANDLE_VALUE) {
-        memset(buffer, 0, sizeof(buffer));
-        if (ReadFile(hFile, buffer, sizeof(buffer) - 1, &bytesRead, NULL) && bytesRead > 0) {
-            int val = 0;
-            if (sscanf(buffer, "autolaunch=%d", &val) == 1) {
-                if (val >= 0 && val < AUTOLAUNCH_COUNT) {
-                    g_pref = (AutoLaunchPref)val;
-                }
-            }
-        }
-        CloseHandle(hFile);
-    }
-
-    /* Registry fallback: if both cfg files were missing, read last known pref from HKLM */
-    if (g_pref == AUTOLAUNCH_NONE) {
-        HKEY hKey;
-        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"Software\\Mero", 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
-            DWORD val = 0, valLen = sizeof(val);
-            if (RegQueryValueExW(hKey, L"AutoLaunch", NULL, NULL, (LPBYTE)&val, &valLen) == ERROR_SUCCESS) {
-                if (val > 0 && val < (DWORD)AUTOLAUNCH_COUNT) {
-                    g_pref = (AutoLaunchPref)val;
-                }
-            }
-            RegCloseKey(hKey);
-        }
-    }
-
-    if (g_pref != AUTOLAUNCH_NONE) {
-        g_countdownSeconds = 3;
-        g_countdownActive = TRUE;
-        wsprintfW(g_statusMsg, L"AUTOLAUNCH: %s IN %d SEC... [TAP TO CANCEL]",
-                  g_prefNames[g_pref], g_countdownSeconds);
-    }
+    /* A saved zero is authoritative. Registry is a read-only legacy fallback. */
+    if(!found){HKEY key;if(RegOpenKeyExW(HKEY_LOCAL_MACHINE,L"Software\\Mero",0,KEY_READ,&key)==ERROR_SUCCESS){
+        DWORD val=0,size=sizeof(val);
+        if(RegQueryValueExW(key,L"AutoLaunch",NULL,NULL,(LPBYTE)&val,&size)==ERROR_SUCCESS&&val<AUTOLAUNCH_COUNT)g_pref=(AutoLaunchPref)val;
+        RegCloseKey(key);
+    }}
+    if(g_pref!=AUTOLAUNCH_NONE&&!g_returningHome){g_countdownSeconds=3;g_countdownActive=TRUE;
+        wsprintfW(g_statusMsg,L"START %s IN 3s // TAP TO CANCEL",g_apps[g_pref].name);}
 }
-
-/* Save shell configuration */
-static void SaveConfig(void)
+static BOOL SaveConfig(void)
 {
-    HANDLE hFile;
-    DWORD bytesWritten;
-    char buffer[128];
-    int len;
-
-    CreateDirectoryW(CFG_DIR, NULL);
-    CreateDirectoryW(L"\\ResidentFlash\\MERO", NULL);
-
-    len = sprintf(buffer, "autolaunch=%d\r\ntimeout=3\r\n", (int)g_pref);
-
-    /* Write SDMMC config */
-    hFile = CreateFileW(CFG_FILE, GENERIC_WRITE, FILE_SHARE_READ, NULL,
-                        CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (hFile != INVALID_HANDLE_VALUE) {
-        WriteFile(hFile, buffer, (DWORD)len, &bytesWritten, NULL);
-        FlushFileBuffers(hFile);
-        CloseHandle(hFile);
+    HANDLE f;DWORD done;char buffer[128];WCHAR backup[160];BOOL ok,existed;
+    int len=sprintf(buffer,"autolaunch=%d\r\ntimeout=3\r\n",(int)g_pref);
+    CreateDirectoryW(CFG_DIR,NULL);
+    f=CreateFileW(L"\\SDMMC\\MERO\\shell.cfg.next",GENERIC_WRITE,0,NULL,CREATE_ALWAYS,FILE_ATTRIBUTE_NORMAL,NULL);
+    if(f==INVALID_HANDLE_VALUE)return FALSE;
+    ok=WriteFile(f,buffer,len,&done,NULL)&&done==(DWORD)len&&FlushFileBuffers(f);
+    CloseHandle(f);if(!ok)return FALSE;
+    existed=GetFileAttributesW(CFG_FILE)!=INVALID_FILE_ATTRIBUTES;
+    wsprintfW(backup,L"\\SDMMC\\MERO\\shell-pref-%lu.cfg",GetTickCount());
+    if(existed&&!MoveFileW(CFG_FILE,backup))return FALSE;
+    if(!MoveFileW(L"\\SDMMC\\MERO\\shell.cfg.next",CFG_FILE)){
+        if(existed)MoveFileW(backup,CFG_FILE);return FALSE;
     }
-
-    /* Write ResidentFlash config */
-    hFile = CreateFileW(L"\\ResidentFlash\\MERO\\shell.cfg", GENERIC_WRITE, FILE_SHARE_READ, NULL,
-                        CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (hFile != INVALID_HANDLE_VALUE) {
-        WriteFile(hFile, buffer, (DWORD)len, &bytesWritten, NULL);
-        FlushFileBuffers(hFile);
-        CloseHandle(hFile);
-    }
-
-    /* Registry fallback — survives cold boots where SD may be unavailable at startup */
-    {
-        HKEY hKey;
-        if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, L"Software\\Mero", 0, NULL, 0, 0, NULL, &hKey, NULL) == ERROR_SUCCESS) {
-            DWORD val = (DWORD)g_pref;
-            RegSetValueExW(hKey, L"AutoLaunch", 0, REG_DWORD, (const BYTE*)&val, sizeof(DWORD));
-            RegFlushKey(HKEY_LOCAL_MACHINE);
-            RegCloseKey(hKey);
-        }
-    }
+    return TRUE;
 }
 
 /* Query system metrics */
@@ -430,6 +400,11 @@ static void QueryCurrentBootTarget(void)
 /* Query active USB Function client driver */
 static void QueryCurrentUsbMode(void)
 {
+    WCHAR client[128];
+    if(MeroUsbQuery(client)) {
+        g_usbMode=!_wcsicmp(client,L"Serial_Class")?USB_MODE_ACTIVESYNC:USB_MODE_MASS_STORAGE;
+        return;
+    }
     HKEY hKey;
     g_usbMode = USB_MODE_MASS_STORAGE;
     if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"Drivers\\USB\\FunctionDrivers", 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
@@ -451,40 +426,13 @@ static void QueryCurrentUsbMode(void)
 /* Toggle USB Function mode between Mass Storage and ActiveSync */
 static void ToggleUsbMode(void)
 {
-    g_usbMode = (UsbMode)((g_usbMode + 1) % USB_MODE_COUNT);
-    const WCHAR *driverName = (g_usbMode == USB_MODE_ACTIVESYNC) ? L"Serial_Class" : L"Mass_Storage_Class";
-
-    HKEY hKey;
-    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"Drivers\\USB\\FunctionDrivers", 0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
-        RegSetValueExW(hKey, L"DefaultClientDriver", 0, REG_SZ,
-                       (const BYTE*)driverName, (lstrlenW(driverName) + 1) * sizeof(WCHAR));
-        RegFlushKey(hKey);
-        RegCloseKey(hKey);
-    }
-
-    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"Software\\Mesada\\USB", 0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
-        DWORD val = (g_usbMode == USB_MODE_ACTIVESYNC) ? 1 : 0;
-        RegSetValueExW(hKey, L"UsbMode", 0, REG_DWORD, (const BYTE*)&val, sizeof(DWORD));
-        RegFlushKey(hKey);
-        RegCloseKey(hKey);
-    }
-
-    /* Send runtime IOCTL to notify USB Function Controller */
-    #define IOCTL_UFN_CHANGE_CURRENT_CLIENT 0x00220008
-    HANDLE hUsb = CreateFileW(L"UFN1:", GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
-    if (hUsb == INVALID_HANDLE_VALUE) {
-        hUsb = CreateFileW(L"UFN0:", GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
-    }
-    if (hUsb != INVALID_HANDLE_VALUE) {
-        DWORD bytesRet = 0;
-        DeviceIoControl(hUsb, IOCTL_UFN_CHANGE_CURRENT_CLIENT,
-                        (LPVOID)driverName, (lstrlenW(driverName) + 1) * sizeof(WCHAR),
-                        NULL, 0, &bytesRet, NULL);
-        CloseHandle(hUsb);
-    }
-
-    wsprintfW(g_statusMsg, L"USB: %s [REBOOT IF NEEDED]", g_usbModeNames[g_usbMode]);
-    InvalidateRect(g_hWnd, NULL, FALSE);
+    UsbMode wanted=(UsbMode)((g_usbMode+1)%USB_MODE_COUNT);
+    const WCHAR *driver=wanted==USB_MODE_ACTIVESYNC?L"Serial_Class":L"Mass_Storage_Class";
+    if(MeroUsbSet(driver)) {
+        g_usbMode=wanted;g_usbStartupReady=TRUE;
+        wsprintfW(g_statusMsg,L"USB preference + active driver: %s",g_usbModeNames[g_usbMode]);
+    } else wsprintfW(g_statusMsg,L"USB change failed (%lu); previous preference preserved",GetLastError());
+    InvalidateRect(g_hWnd,NULL,FALSE);
 }
 
 /* Apply new HKLM\init\Launch50 boot target and persist to flash */
@@ -618,11 +566,11 @@ static BOOL LaunchApp(const WCHAR *path, BOOL exitShell)
         /* Fallback between \SDMMC and \ResidentFlash */
         if (wcsstr(path, L"\\SDMMC\\MERO\\")) {
             WCHAR altPath[MAX_PATH];
-            wsprintfW(altPath, L"\\ResidentFlash\\MERO\\%s", path + 12);
+            wsprintfW(altPath, L"\\ResidentFlash\\MERO\\%s", wcsrchr(path,L'\\')+1);
             ret = CreateProcessW(altPath, NULL, NULL, NULL, FALSE, 0, NULL, NULL, NULL, &pi);
         } else if (wcsstr(path, L"\\ResidentFlash\\MERO\\")) {
             WCHAR altPath[MAX_PATH];
-            wsprintfW(altPath, L"\\SDMMC\\MERO\\%s", path + 20);
+            wsprintfW(altPath, L"\\SDMMC\\MERO\\%s", wcsrchr(path,L'\\')+1);
             ret = CreateProcessW(altPath, NULL, NULL, NULL, FALSE, 0, NULL, NULL, NULL, &pi);
         }
     }
@@ -631,10 +579,46 @@ static BOOL LaunchApp(const WCHAR *path, BOOL exitShell)
         CloseHandle(pi.hThread);
         if (exitShell && g_hWnd) {
             /* Destroy shell cleanly so launched child owns the screen & RAM */
-            DestroyWindow(g_hWnd);
+            ShowWindow(g_hWnd, SW_HIDE);
         }
     }
     return ret;
+}
+
+static BOOL LaunchCompanion(int id)
+{
+    PROCESS_INFORMATION pi;const CompanionApp *app;
+    if(id<=0||id>=AUTOLAUNCH_COUNT)return FALSE;
+    app=&g_apps[id];
+    if(id==AUTOLAUNCH_BT){HWND bt=FindWindowW(L"MERO_BT_FILES",NULL);
+        (void)bt;
+        if(MeroUsbSet(L"Serial_Class")&&MeroStartAgent(TRUE,TRUE)){
+            g_usbStartupReady=TRUE;g_usbMode=USB_MODE_ACTIVESYNC;
+            ShowWindow(g_hWnd,SW_HIDE);return TRUE;
+        }return FALSE;}
+    if(!app->args)return LaunchApp(app->path,TRUE);
+    memset(&pi,0,sizeof(pi));
+    if(!CreateProcessW(app->path,(LPWSTR)app->args,NULL,NULL,FALSE,0,NULL,NULL,NULL,&pi))return FALSE;
+    CloseHandle(pi.hProcess);CloseHandle(pi.hThread);ShowWindow(g_hWnd,SW_HIDE);return TRUE;
+}
+static int CompanionAt(int slot)
+{
+    int index=g_appPage*4+slot;
+    if(g_selectDefault){if(index==0)return 0;index--;}
+    {unsigned int i;for(i=0;i<sizeof(g_appOrder)/sizeof(g_appOrder[0]);i++) {
+        int id=g_appOrder[i];
+        if((id==AUTOLAUNCH_VIS||id==AUTOLAUNCH_TERMINAL) && GetFileAttributesW(g_apps[id].path)==INVALID_FILE_ATTRIBUTES)continue;
+        if(!index--)return id;
+    }}return -1;
+}
+static int CompanionPages(void) {
+    int n=g_selectDefault?1:0;unsigned int i;
+    for(i=0;i<sizeof(g_appOrder)/sizeof(g_appOrder[0]);i++) {
+        int id=g_appOrder[i];
+        if((id==AUTOLAUNCH_VIS||id==AUTOLAUNCH_TERMINAL) && GetFileAttributesW(g_apps[id].path)==INVALID_FILE_ATTRIBUTES)continue;
+        n++;
+    }
+    return (n+3)/4;
 }
 
 /* Restore or launch factory vendor UI (Launch.exe) */
@@ -956,59 +940,35 @@ static void UpdateButtons(void)
 
     switch (g_currentPage) {
     case PAGE_MAIN:
-        /* PAGE 0: Mero OS Core Hub */
-        lstrcpyW(g_buttons[0].title, L"[1] COMPANION LABS >>");
-        lstrcpyW(g_buttons[0].sub,   L"Gallery, Sensors, Tuner, Cam, VU");
-        g_buttons[0].color = RGB(0, 255, 128);
-
-        lstrcpyW(g_buttons[1].title, L"[2] MERO CMD SHELL");
-        lstrcpyW(g_buttons[1].sub,   L"Process Mgr & Interactive CLI");
-        g_buttons[1].color = RGB(0, 220, 255);
-
-        lstrcpyW(g_buttons[2].title, L"[3] SYSTEM PROBE");
-        lstrcpyW(g_buttons[2].sub,   L"Hardware & Screen Diagnostics");
-        g_buttons[2].color = RGB(255, 180, 0);
-
-        lstrcpyW(g_buttons[3].title, L"[4] DEFAULT BOOT APP");
-        lstrcpyW(g_buttons[3].sub,   g_prefNames[g_pref]);
-        g_buttons[3].color = RGB(180, 140, 255);
-
-        lstrcpyW(g_buttons[4].title, L"[5] SYSTEM TOOLS >>");
-        lstrcpyW(g_buttons[4].sub,   L"USB Mode, Vendor UI, Power");
-        g_buttons[4].color = RGB(120, 200, 255);
-
-        lstrcpyW(g_buttons[5].title, L"[6] EXIT TO DESKTOP");
-        lstrcpyW(g_buttons[5].sub,   L"Leave Shell & Show WinCE Desktop");
-        g_buttons[5].color = RGB(255, 80, 80);
+        lstrcpyW(g_buttons[0].title,L"01 - COMPANION LABS >>");
+        lstrcpyW(g_buttons[0].sub,L"All applications, one place");
+        lstrcpyW(g_buttons[1].title,L"02 - DEFAULT APP >>");
+        lstrcpyW(g_buttons[1].sub,g_apps[g_pref].name);
+        lstrcpyW(g_buttons[2].title,L"03 - BLUETOOTH LINK >>");
+        lstrcpyW(g_buttons[2].sub,L"Agent and connection settings");
+        lstrcpyW(g_buttons[3].title,L"04 - SYSTEM TOOLS >>");
+        lstrcpyW(g_buttons[3].sub,L"Hardware and recovery settings");
+        lstrcpyW(g_buttons[4].title,L"05 - WINCE DESKTOP");
+        lstrcpyW(g_buttons[4].sub,L"Leave the launcher");
+        lstrcpyW(g_buttons[5].title,L"06 - CONNECTION HELP");
+        lstrcpyW(g_buttons[5].sub,L"Bluetooth / ActiveSync state");
+        {int b;for(b=0;b<6;b++)g_buttons[b].color=b==4?RGB(255,120,100):RGB(90,230,200);}
         break;
-
     case PAGE_COMPANIONS:
-        /* PAGE 1: Custom Companion Applications Suite */
-        lstrcpyW(g_buttons[0].title, L"mero-gallery.exe");
-        lstrcpyW(g_buttons[0].sub,   L"[1] media visualizer + gallery");
-        g_buttons[0].color = RGB(0, 255, 128);
-
-        lstrcpyW(g_buttons[1].title, L"mero-media-ctrl.exe");
-        lstrcpyW(g_buttons[1].sub,   L"[2] clock, weather, GPS + FM");
-        g_buttons[1].color = RGB(0, 200, 255);
-
-        lstrcpyW(g_buttons[2].title, L"mero-tuner.exe");
-        lstrcpyW(g_buttons[2].sub,   L"[3] display color calibrator");
-        g_buttons[2].color = RGB(255, 140, 40);
-
-        lstrcpyW(g_buttons[3].title, L"mero-cam.exe");
-        lstrcpyW(g_buttons[3].sub,   L"[4] desktop webcam feed");
-        g_buttons[3].color = RGB(0, 220, 255);
-
-        lstrcpyW(g_buttons[4].title, L"mero-vis.exe");
-        lstrcpyW(g_buttons[4].sub,   L"[5] audio spectrum vu meter");
-        g_buttons[4].color = RGB(255, 180, 0);
-
-        lstrcpyW(g_buttons[5].title, L"[6] << BACK TO MAIN");
-        lstrcpyW(g_buttons[5].sub,   L"return to main os hub");
-        g_buttons[5].color = RGB(160, 160, 160);
-        break;
-
+        {int slot;for(slot=0;slot<4;slot++){
+            int b=slot<2?slot:slot+1,id=CompanionAt(slot);
+            if(id<0){lstrcpyW(g_buttons[b].title,L"");lstrcpyW(g_buttons[b].sub,L"");}
+            else{
+                wsprintfW(g_buttons[b].title,L"%s%s",g_pref==id?L"* ":L"",g_apps[id].name);
+                lstrcpyW(g_buttons[b].sub,g_selectDefault?L"Tap to use at startup":g_apps[id].description);
+            }
+            g_buttons[b].color=RGB(70,230,200);
+        }}
+        wsprintfW(g_buttons[2].title,L"MORE APPS >> [%d/%d]",g_appPage+1,CompanionPages());
+        lstrcpyW(g_buttons[2].sub,L"Next page");g_buttons[2].color=RGB(140,190,255);
+        lstrcpyW(g_buttons[5].title,L"<< BACK TO MAIN");
+        lstrcpyW(g_buttons[5].sub,g_selectDefault?L"Cancel default selection":L"Return to shell home");
+        g_buttons[5].color=RGB(180,180,180);break;
     case PAGE_SYSTEM:
         /* PAGE 2: System Tools & Hardware Options */
         lstrcpyW(g_buttons[0].title, L"[1] AUTONOMOUS BOOT");
@@ -1037,8 +997,8 @@ static void UpdateButtons(void)
         break;
 
     case PAGE_BLUETOOTH:
-        lstrcpyW(g_buttons[0].title, L"[1] BLUETOOTH FILES >>");
-        lstrcpyW(g_buttons[0].sub, L"Connect, list, download, upload test");
+        lstrcpyW(g_buttons[0].title, L"[1] CONNECT / AGENT >>");
+        lstrcpyW(g_buttons[0].sub, L"Start or reconnect the saved agent");
         lstrcpyW(g_buttons[1].title, L"[2] OEM RADIO ON");
         lstrcpyW(g_buttons[1].sub, L"Request power through actual backend");
         lstrcpyW(g_buttons[2].title, L"[3] OEM RADIO OFF");
@@ -1529,6 +1489,7 @@ static void OnPaint(HWND hWnd)
 static void OnTouch(int x, int y)
 {
     int i;
+    g_allowBootReload=FALSE;
 
     /* Any touch cancels countdown */
     if (g_countdownActive) {
@@ -1542,113 +1503,26 @@ static void OnTouch(int x, int y)
         if (PtInRect(&g_buttons[i].rc, (POINT){ x, y })) {
             switch (g_currentPage) {
             case PAGE_MAIN:
-                switch (i) {
-                case 0: /* Open Companion Suite Submenu */
-                    g_currentPage = PAGE_COMPANIONS;
-                    wsprintfW(g_statusMsg, L"Companion Apps // tap app to launch");
-                    InvalidateRect(g_hWnd, NULL, FALSE);
-                    break;
-
-                case 1: /* Mero CMD Shell */
-                    wsprintfW(g_statusMsg, L"Launching Mero CMD Shell...");
-                    InvalidateRect(g_hWnd, NULL, FALSE);
-                    UpdateWindow(g_hWnd);
-                    if (!LaunchApp(PATH_CMD, TRUE)) {
-                        wsprintfW(g_statusMsg, L"CMD binary not found: %s", PATH_CMD);
-                        InvalidateRect(g_hWnd, NULL, FALSE);
-                    }
-                    break;
-
-                case 2: /* System Probe */
-                    wsprintfW(g_statusMsg, L"Launching Hardware Probe...");
-                    InvalidateRect(g_hWnd, NULL, FALSE);
-                    UpdateWindow(g_hWnd);
-                    if (!LaunchApp(PATH_PROBE, TRUE)) {
-                        wsprintfW(g_statusMsg, L"Probe not found: %s", PATH_PROBE);
-                        InvalidateRect(g_hWnd, NULL, FALSE);
-                    }
-                    break;
-
-                case 3: /* Cycle Boot Preference */
-                    g_pref = (AutoLaunchPref)((g_pref + 1) % AUTOLAUNCH_COUNT);
-                    SaveConfig();
-                    wsprintfW(g_statusMsg, L"Default launch set to: %s", g_prefNames[g_pref]);
-                    InvalidateRect(g_hWnd, NULL, FALSE);
-                    break;
-
-                case 4: /* Switch to System Tools */
-                    g_currentPage = PAGE_SYSTEM;
-                    wsprintfW(g_statusMsg, L"System Tools: USB Mode, Vendor GPS UI, Audio Volume");
-                    InvalidateRect(g_hWnd, NULL, FALSE);
-                    break;
-
-                case 5: /* Exit to WinCE Desktop */
-                    ShowDesktop();
-                    DestroyWindow(g_hWnd);
-                    break;
-                }
-                break;
-
+                if(i==0||i==1){g_currentPage=PAGE_COMPANIONS;g_appPage=0;g_selectDefault=(i==1);
+                    lstrcpyW(g_statusMsg,g_selectDefault?L"Choose startup app // * = current default":L"All apps // * = startup default");}
+                else if(i==2)g_currentPage=PAGE_BLUETOOTH;
+                else if(i==3)g_currentPage=PAGE_SYSTEM;
+                else if(i==4){ShowDesktop();DestroyWindow(g_hWnd);}
+                else lstrcpyW(g_statusMsg,L"Keep AGENT ON + ActiveSync. Mass Storage locks SD writes.");
+                InvalidateRect(g_hWnd,NULL,FALSE);break;
             case PAGE_COMPANIONS:
-                switch (i) {
-                case 0: /* Media Visualizer */
-                    wsprintfW(g_statusMsg, L"Launching Media Visualizer...");
-                    InvalidateRect(g_hWnd, NULL, FALSE);
-                    UpdateWindow(g_hWnd);
-                    if (!LaunchApp(PATH_GALLERY, TRUE)) {
-                        wsprintfW(g_statusMsg, L"Gallery binary not found: %s", PATH_GALLERY);
-                        InvalidateRect(g_hWnd, NULL, FALSE);
+                if(i==5){g_currentPage=PAGE_MAIN;g_selectDefault=FALSE;}
+                else if(i==2)g_appPage=(g_appPage+1)%CompanionPages();
+                else{
+                    int id=CompanionAt(i<2?i:i-1);
+                    if(id>=0){
+                        if(g_selectDefault){AutoLaunchPref previous=g_pref;g_pref=(AutoLaunchPref)id;
+                            if(SaveConfig()){wsprintfW(g_statusMsg,L"Startup default saved: %s",g_apps[id].name);g_currentPage=PAGE_MAIN;g_selectDefault=FALSE;}
+                            else{g_pref=previous;lstrcpyW(g_statusMsg,L"Could not save. Keep SD writable / ActiveSync.");}}
+                        else if(!LaunchCompanion(id))wsprintfW(g_statusMsg,L"Unavailable on SD: %s",g_apps[id].name);
                     }
-                    break;
-
-                case 1: /* Sensor terminal */
-                    wsprintfW(g_statusMsg, L"Launching Sensor Terminal...");
-                    InvalidateRect(g_hWnd, NULL, FALSE);
-                    UpdateWindow(g_hWnd);
-                    if (!LaunchApp(PATH_MEDIA_CTRL, TRUE)) {
-                        wsprintfW(g_statusMsg, L"Sensor Terminal binary not found");
-                        InvalidateRect(g_hWnd, NULL, FALSE);
-                    }
-                    break;
-
-                case 2: /* Display & Color Tuner */
-                    wsprintfW(g_statusMsg, L"Launching Display & Color Tuner...");
-                    InvalidateRect(g_hWnd, NULL, FALSE);
-                    UpdateWindow(g_hWnd);
-                    if (!LaunchApp(PATH_TUNER, TRUE)) {
-                        wsprintfW(g_statusMsg, L"Display Tuner not found: %s", PATH_TUNER);
-                        InvalidateRect(g_hWnd, NULL, FALSE);
-                    }
-                    break;
-
-                case 3: /* Darkhorse Webcam Visualizer */
-                    wsprintfW(g_statusMsg, L"Launching Darkhorse Webcam Monitor...");
-                    InvalidateRect(g_hWnd, NULL, FALSE);
-                    UpdateWindow(g_hWnd);
-                    if (!LaunchApp(PATH_CAM, TRUE)) {
-                        wsprintfW(g_statusMsg, L"Darkhorse Cam: Old-cam bridge configured; app in build queue");
-                        InvalidateRect(g_hWnd, NULL, FALSE);
-                    }
-                    break;
-
-                case 4: /* Audio Spectrum VU Meter */
-                    wsprintfW(g_statusMsg, L"Launching Audio Spectrum VU Meter...");
-                    InvalidateRect(g_hWnd, NULL, FALSE);
-                    UpdateWindow(g_hWnd);
-                    if (!LaunchApp(PATH_VIS, TRUE)) {
-                        wsprintfW(g_statusMsg, L"Audio VU Deck: Audio subsystem ready; app in build queue");
-                        InvalidateRect(g_hWnd, NULL, FALSE);
-                    }
-                    break;
-
-                case 5: /* Back to Main Hub */
-                    g_currentPage = PAGE_MAIN;
-                    wsprintfW(g_statusMsg, L"Mero OS Hub ready");
-                    InvalidateRect(g_hWnd, NULL, FALSE);
-                    break;
                 }
-                break;
-
+                InvalidateRect(g_hWnd,NULL,FALSE);break;
             case PAGE_SYSTEM:
                 switch (i) {
                 case 0: /* Autonomous Boot Toggle */
@@ -1692,13 +1566,24 @@ static void OnTouch(int x, int y)
             case PAGE_BLUETOOTH:
                 switch (i) {
                 case 0:
-                    if (!LaunchApp(PATH_BT, FALSE) &&
-                        !LaunchApp(L"\\SDMMC\\BT\\mero-bt.exe", FALSE))
-                        lstrcpyW(g_statusMsg, L"Download mero-bt.exe to SD/BT or install in SD/MERO");
+                    {
+                    if(MeroUsbSet(L"Serial_Class")&&MeroStartAgent(TRUE,TRUE)){
+                        g_usbStartupReady=TRUE;g_usbMode=USB_MODE_ACTIVESYNC;
+                        lstrcpyW(g_statusMsg,L"Agent connect requested // ActiveSync ready");
+                    }
+                    else wsprintfW(g_statusMsg,L"Agent start failed (%lu). Check ActiveSync and SD access.",GetLastError());
                     break;
+                }
                 case 1: BluetoothOemPower(1); break;
                 case 2: BluetoothOemPower(0); break;
-                case 3: lstrcpyW(g_statusMsg, BluetoothOemWindow() ? L"OEM backend running; use file client to test link" : L"OEM backend stopped; CONNECT in Bluetooth Files starts it"); break;
+                case 3:
+                    if(MeroBusLock()) {
+                        DWORD age=(DWORD)(GetTickCount()-mero_bus->tick)/1000;
+                        if(mero_bus->generation&&age<15)wsprintfW(g_statusMsg,L"Bluetooth agent LIVE // PC state %lus ago",age);
+                        else lstrcpyW(g_statusMsg,L"No fresh PC state // tap CONNECT / AGENT");
+                        ReleaseMutex(mero_bus_mutex);
+                    }
+                    break;
                 case 4: BluetoothCaptureVendor(); break;
                 case 5: g_currentPage = PAGE_SYSTEM; break;
                 }
@@ -1764,6 +1649,12 @@ static void OnTouch(int x, int y)
 /* Window procedure */
 static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
+    if(uMsg==RegisterWindowMessageW(L"MERO_SHELL_HOME_V1")){
+        g_countdownActive=FALSE;g_currentPage=PAGE_MAIN;g_selectDefault=FALSE;
+        lstrcpyW(g_statusMsg,L"Home // startup app paused");
+        ShowWindow(hWnd,SW_SHOW);SetForegroundWindow(hWnd);InvalidateRect(hWnd,NULL,FALSE);return 0;
+    }
+
     switch (uMsg) {
     case WM_CREATE:
         MeroLiveInit(hWnd, NULL);
@@ -1774,7 +1665,11 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         QueryCurrentBootTarget();
         QueryCurrentUsbMode();
         UpdateButtons();
+        g_bootStarted=GetTickCount();g_agentAttempt=g_usbAttempt=g_bootStarted;
+        g_usbStartupReady=MeroUsbSet(L"Serial_Class");
+        if(g_usbStartupReady)g_usbMode=USB_MODE_ACTIVESYNC;
         LoadConfig();
+        if(g_usbStartupReady)MeroStartAgent(FALSE,FALSE);
         if (GetFileAttributesW(L"\\SDMMC\\MERO\\launch_strings.txt") == 0xFFFFFFFF) {
             PerformSystemDump();
         }
@@ -1788,7 +1683,15 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
 
     case WM_TIMER:
         if (wParam == MERO_LIVE_TIMER) { MeroLiveTick(hWnd); return 0; }
-        if (wParam == TIMER_ID_TICK) BluetoothOemTick();
+        if (wParam == TIMER_ID_TICK) {
+            DWORD now=GetTickCount();BluetoothOemTick();
+            if((DWORD)(now-g_bootStarted)<60000 && (DWORD)(now-g_agentAttempt)>=2000) {
+                g_agentAttempt=now;
+                if(!g_usbStartupReady){g_usbAttempt=now;g_usbStartupReady=MeroUsbSet(L"Serial_Class");if(g_usbStartupReady)g_usbMode=USB_MODE_ACTIVESYNC;}
+                if(g_usbStartupReady)MeroStartAgent(FALSE,FALSE);
+                if(!g_sdPrefsLoaded&&g_allowBootReload&&!g_returningHome&&GetFileAttributesW(CFG_FILE)!=INVALID_FILE_ATTRIBUTES)LoadConfig();
+            }
+        }
         if (mero_standby) return 0;
         if (wParam == TIMER_ID_TICK) {
             if (!IsWindowVisible(hWnd)) return 0;
@@ -1801,19 +1704,16 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
                 if (g_countdownSeconds > 1) {
                     g_countdownSeconds--;
                     wsprintfW(g_statusMsg, L"AUTOLAUNCH: %s IN %d SEC... [TAP TO CANCEL]",
-                              g_prefNames[g_pref], g_countdownSeconds);
+                              g_apps[g_pref].name, g_countdownSeconds);
                 } else {
                     g_countdownActive = FALSE;
-                    wsprintfW(g_statusMsg, L"Auto-launching %s...", g_prefNames[g_pref]);
+                    wsprintfW(g_statusMsg, L"Auto-launching %s...", g_apps[g_pref].name);
                     InvalidateRect(hWnd, NULL, FALSE);
                     UpdateWindow(hWnd);
-                    /* Execute preferred */
-                    if (g_pref == AUTOLAUNCH_GALLERY) LaunchApp(PATH_GALLERY, TRUE);
-                    else if (g_pref == AUTOLAUNCH_MEDIA) LaunchApp(PATH_MEDIA_CTRL, TRUE);
-                    else if (g_pref == AUTOLAUNCH_TUNER) LaunchApp(PATH_TUNER, TRUE);
-                    else if (g_pref == AUTOLAUNCH_CAM) LaunchApp(PATH_CAM, TRUE);
-                    else if (g_pref == AUTOLAUNCH_CMD) LaunchApp(PATH_CMD, TRUE);
-                    else if (g_pref == AUTOLAUNCH_PROBE) LaunchApp(PATH_PROBE, TRUE);
+                    if(!LaunchCompanion(g_pref)) {
+                        if(++g_launchAttempts<15){g_countdownActive=TRUE;g_countdownSeconds=2;lstrcpyW(g_statusMsg,L"Waiting for startup app / SD; retrying...");}
+                        else lstrcpyW(g_statusMsg,L"Startup app unavailable // shell remains usable");
+                    }
                 }
                 InvalidateRect(hWnd, NULL, FALSE);
             } else if (g_memAvailMB != prevAvail || g_batteryPercent != prevBat || g_isAC != prevAC) {
@@ -1854,6 +1754,7 @@ int WINAPI WinMain(
     (void)lpCmdLine;
     (void)nCmdShow;
 
+    g_returningHome=lpCmdLine && wcsstr(lpCmdLine,L"--home");
     g_hInstance = hInstance;
     g_screenW = GetSystemMetrics(SM_CXSCREEN);
     g_screenH = GetSystemMetrics(SM_CYSCREEN);
@@ -1866,7 +1767,7 @@ int WINAPI WinMain(
             if (GetFileAttributesW(L"\\SDMMC\\MERO\\mero-shell.exe") != 0xFFFFFFFF) {
                 PROCESS_INFORMATION pi;
                 memset(&pi, 0, sizeof(pi));
-                if (CreateProcessW(L"\\SDMMC\\MERO\\mero-shell.exe", NULL, NULL, NULL, FALSE, 0, NULL, NULL, NULL, &pi)) {
+                if (CreateProcessW(L"\\SDMMC\\MERO\\mero-shell.exe", lpCmdLine, NULL, NULL, FALSE, 0, NULL, NULL, NULL, &pi)) {
                     CloseHandle(pi.hProcess);
                     CloseHandle(pi.hThread);
                     return 0; /* Handed off to SDMMC! */
@@ -1878,6 +1779,7 @@ int WINAPI WinMain(
     /* Single instance check: if shell already running (e.g. hidden for desktop), restore it */
     HWND hExisting = FindWindowW(L"MeroShellWndClass", L"Mero Shell");
     if (hExisting) {
+        PostMessageW(hExisting, RegisterWindowMessageW(L"MERO_SHELL_HOME_V1"), 0, 0);
         ShowWindow(hExisting, SW_SHOWNORMAL);
         SetWindowPos(hExisting, HWND_TOPMOST, 0, 0, g_screenW, g_screenH, SWP_SHOWWINDOW);
         SetForegroundWindow(hExisting);

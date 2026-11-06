@@ -111,8 +111,13 @@ def check():
                     except SystemExit:
                         pass
                 assert not (card / "MERO/deploy-staging").exists()
-                deploy.deploy(card)
+                keyed = folder / "mero-agent.exe"
+                keyed.write_bytes((ROOT / "wince/shell/mero-shell.exe").read_bytes())
+                public_sources = list((ROOT / "wince").glob("*/*.exe")) + [keyed]
+                with patch.object(Path, "glob", return_value=iter(public_sources)):
+                    deploy.deploy(card)
             backups = list((card / "MERO/deploy-backups").glob("*/mero-shell.exe"))
+            assert not (card / "MERO/mero-agent.exe").exists()
             assert len(backups) == 1 and backups[0].read_bytes() == b"previous working shell"
             assert (card / "MERO/mero-shell.exe").read_bytes() == (ROOT / "wince/shell/mero-shell.exe").read_bytes()
             assert (card / "MERO/gallery.cfg").read_text() == "orient=3\n"

@@ -93,3 +93,57 @@ rtk systemctl --user stop mero-bt-ftp.service
 ```
 
 Shared ARM executables are build outputs, not automatic updates. The custom client stages downloads on SD and does not overwrite the installed shell or recovery binaries. Initial pairing still uses the device's native Bluetooth controls.
+
+## Signed agent channel
+
+The keyed agent uses this FTP share as its transport. `scripts/foston_agent.py`
+publishes one authenticated job at a time, and the device polls it while
+**AGENT ON**. Filesystem changes are staged and verified, previous files stay in
+per-job backups, and signed results are cached on the device. The CLI retires
+completed commands, verifies returned file bytes, and archives transferred
+payloads outside the share. Keyed bootstrap binaries are also archived after
+the first authenticated reply.
+
+The private host state under `~/.config/mero/foston-agent/` contains the key,
+monotonic sequence, pending job, receipts and keyed build. Preserve it. Do not
+commit or publicly publish it or `wince/bluetooth/mero-agent-key.h`. There is no
+separate unauthenticated network command port.
+
+See [AGENTS.md](../../AGENTS.md) for commands, prerequisites, pending-job handling,
+safe agent upgrades and recovery limits. This workflow is hardware-verified;
+forcing a power loss during an update has deliberately not been tested.
+# Bluetooth live companions
+
+`mero-bridge.service` now publishes signed weather, YouTube Music and cinema
+snapshots in the existing Bluetooth FTP share. The keyed agent pulls them about
+every two seconds and publishes the decoded UTF-8 lines in shared RAM. Apps
+retain the PPP/TCP receiver as a fallback. This does not write an SD snapshot or
+agent backup on every refresh.
+
+Weather still refreshes from wttr.in every ten minutes, with retry after a
+failed request. The display separates link health from weather fetch age.
+`~/.config/mero/weather.conf` selects the city.
+
+Music uses one MPRIS GetAll snapshot for metadata, position, duration and control
+capabilities. The bridge accepts only HTTPS URLs whose hostname is exactly
+`music.youtube.com`. An ordinary YouTube video is excluded. If multiple music
+sessions are ambiguous, controls are disabled. Missing timing stays unavailable.
+
+The device sends signed touch events back through FTP. Each event identifies the
+displayed video and has a short expiry. The PC records the event before running
+the allowlisted MPRIS action; a repeated upload cannot repeat a Next press. An
+interrupted action may need a fresh press rather than being replayed.
+
+The host keeps durable event receipts under `~/.config/mero/foston-agent/`.
+Do not delete the agent identity, counters, pending RPC or live receipts to retry
+a command. `live-state.txt` and `live-event.txt` contain signed state, not keys.
+
+Artwork is resized on the PC to one 112×112 RGB565 thumbnail. Pillow is used
+when available; missing artwork does not disable playback controls or weather.
+Firefox's exported MPRIS image is preferred, with the current YouTube video
+thumbnail as a fallback. The signed snapshot identifies its SHA256 and track;
+the agent verifies the complete 25,088-byte image before publishing it to a
+separate RAM mapping. The deck clears obsolete artwork as soon as it sees a
+track change and clears its image buffers on exit. No cover files are written
+to the Foston's SD card. The PC keeps at most four owned `art-<SHA>.565` cache
+files so the Bluetooth file listing stays small. Original artwork is untouched.

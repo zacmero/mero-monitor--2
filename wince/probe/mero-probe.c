@@ -5,10 +5,13 @@
  */
 
 #define WIN32_LEAN_AND_MEAN
+#include <winsock2.h>
 #include <windows.h>
 #include <tchar.h>
 #include <stdio.h>
 #include <string.h>
+#include "../mero-shell-return.h"
+#include "../mero-live.h"
 
 #define PROBE_VERSION       L"0.1.0"
 #define IDC_BTN_EXIT        1001
@@ -254,6 +257,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
 {
     switch (uMsg) {
     case WM_CREATE:
+        MeroLiveInit(hWnd,NULL);
         CollectSystemMetrics(hWnd);
         WriteDiagnosticLog();
 
@@ -273,9 +277,12 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         );
         return 0;
 
+    case WM_TIMER:
+        if(wParam==MERO_LIVE_TIMER)MeroLiveTick(hWnd);
+        return 0;
     case WM_COMMAND:
         if (LOWORD(wParam) == IDC_BTN_EXIT) {
-            DestroyWindow(hWnd);
+            MeroReturnToShell();DestroyWindow(hWnd);
             return 0;
         }
         break;
@@ -292,7 +299,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
 
             /* Redundant touch check for exit button area in case button child window is bypassed */
             if (x >= (g_screenWidth - 120) && y <= 50) {
-                DestroyWindow(hWnd);
+                MeroReturnToShell();DestroyWindow(hWnd);
                 return 0;
             }
 
@@ -304,7 +311,10 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         OnPaint(hWnd);
         return 0;
 
+    case WM_CLOSE:
+        MeroReturnToShell();DestroyWindow(hWnd);return 0;
     case WM_DESTROY:
+        MeroLiveClose(hWnd);
         PostQuitMessage(0);
         return 0;
     }

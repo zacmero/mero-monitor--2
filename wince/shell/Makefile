@@ -18,13 +18,13 @@ LIBS        := -lws2 -ltoolhelp -lcoredll
 all: $(TARGET)
 
 ifeq ($(CC_LOCAL),)
-$(TARGET): $(SRCS) $(RC_SRCS) ../mero-live.h
+$(TARGET): $(SRCS) $(RC_SRCS) ../mero-live.h ../mero-bus.h ../mero-shell-return.h ../mero-agent-start.h
 	@echo "Building with Docker ($(DOCKER_IMG))..."
 	docker run --rm -u $(shell id -u):$(shell id -g) -v "$(abspath ..)":/wince -w /wince/$(notdir $(CURDIR)) $(DOCKER_IMG) \
 		sh -c "arm-mingw32ce-windres -i $(RC_SRCS) -o $(RES_OBJ) && arm-mingw32ce-gcc $(CFLAGS) -o $(TARGET) $(SRCS) $(RES_OBJ) $(LDFLAGS) $(LIBS)"
 	@echo "Built $(TARGET) successfully: $$(ls -lh $(TARGET) | awk '{print $$5}')"
 else
-$(TARGET): $(SRCS) $(RC_SRCS) ../mero-live.h
+$(TARGET): $(SRCS) $(RC_SRCS) ../mero-live.h ../mero-bus.h ../mero-shell-return.h ../mero-agent-start.h
 	@echo "Building with local $(CC_LOCAL)..."
 	arm-mingw32ce-windres -i $(RC_SRCS) -o $(RES_OBJ)
 	arm-mingw32ce-gcc $(CFLAGS) -o $(TARGET) $(SRCS) $(RES_OBJ) $(LDFLAGS) $(LIBS)

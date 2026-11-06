@@ -6,6 +6,15 @@
 #include <string.h>
 #include "../mero-obex.h"
 #include "../mero-live.h"
+#include "../mero-shell-return.h"
+#ifdef MERO_AGENT_BUILD
+#include "mero-agent-key.h"
+static volatile LONG agentOn;
+static volatile LONG agentReconnect;
+#define BT_WINDOW_CLASS L"MERO_FOSTON_AGENT"
+#else
+#define BT_WINDOW_CLASS L"MERO_BT_FILES"
+#endif
 #define WM_BT_RESULT (WM_APP+7)
 #define MAX_FILES 64
 static HWND window;
@@ -36,7 +45,10 @@ static int WaitSocket(int reading) {
 static int TransferBytes(unsigned char *p,unsigned int n,int reading) {
     unsigned int done=0;int got;
     while(done<n){if(!WaitSocket(reading))return 0;
-        got=reading?recv(channel,(char*)p+done,n-done,0):send(channel,(const char*)p+done,n-done,0);
+        /* Bound writes for the legacy WinCE RFCOMM provider: larger writes
+           produced truncated OBEX frames despite reporting send completion. */
+        unsigned int amount=n-done;if(!reading&&amount>256)amount=256;
+        got=reading?recv(channel,(char*)p+done,amount,0):send(channel,(const char*)p+done,amount,0);
         if(got<=0){if(got<0&&WSAGetLastError()==WSAEWOULDBLOCK)continue;return 0;}done+=got;}
     return 1;
 }
@@ -78,7 +90,11 @@ static int StartBackend(void) {
 }
 static int OpenPeer(void) {
     unsigned char address[40];unsigned int n,pos,payload,length,next;u_long nonblocking=1;int error,errorLen=sizeof(error);
+#ifdef MERO_AGENT_BUILD
+    static const unsigned char peer[8]={MERO_AGENT_HOST_BYTES};
+#else
     static const unsigned char peer[8]={0x70,0x27,0x83,0xdd,0x86,0x8c,0,0};
+#endif
     static const unsigned char ftpGuid[16]={6,0x11,0,0,0,0,0,0x10,0x80,0,0,0x80,0x5f,0x9b,0x34,0xfb};
     WCHAR message[180];
     ClosePeer();if(!StartBackend())return 0;
@@ -161,8 +177,14 @@ static void UploadTest(void) {
     n=Exchange(n);if(n&&reply[0]==0xa0)Note(L"Test file uploaded: foston-bt-check.txt");
     else{Note(L"Upload test failed; reconnect");ClosePeer();}
 }
+#ifdef MERO_AGENT_BUILD
+#include "mero-agent-runtime.h"
+#endif
 static DWORD WINAPI Worker(LPVOID value) {
     int action=(int)(LONG)value;
+#ifdef MERO_AGENT_BUILD
+    if(action==4){AgentLoop();InterlockedExchange(&busy,0);PostMessageW(window,WM_BT_RESULT,0,0);return 0;}
+#endif
     if(action==0){if(OpenPeer())ListFiles();}
     else if(channel==INVALID_SOCKET)Note(L"Connect first");
     else if(action==1)ListFiles();else if(action==2)Download();else if(action==3)UploadTest();
@@ -175,19 +197,42 @@ static void Run(int action) {
     if(thread)CloseHandle(thread);else{busy=0;Note(L"Cannot start transfer worker");}
 }
 static LRESULT CALLBACK WndProc(HWND h,UINT msg,WPARAM w,LPARAM l) {
+#ifdef MERO_AGENT_BUILD
+    if(msg==RegisterWindowMessageW(L"MERO_AGENT_CONNECT_V1")) {
+        InterlockedExchange(&agentReconnect,1);
+        if(!agentOn&&!busy){InterlockedExchange(&agentOn,1);Run(4);}
+        if(w){ShowWindow(h,SW_SHOW);SetForegroundWindow(h);}
+        Note(L"Agent reconnect requested");InvalidateRect(h,NULL,TRUE);return 0;
+    }
+#endif
     if(msg==WM_CREATE){SetTimer(h,1,250,NULL);MeroLiveInit(h,NULL);return 0;}
     if(msg==WM_TIMER){if(w==MERO_LIVE_TIMER){MeroLiveTick(h);return 0;}
-        if(busy){HWND back=Backend();if(back)ShowWindow(back,SW_HIDE);SetForegroundWindow(h);}
+#ifdef MERO_AGENT_BUILD
+        if(agentReconnect&&!agentOn&&!busy){InterlockedExchange(&agentOn,1);Run(4);}
+#endif
+        if(busy){HWND back=Backend();if(back)ShowWindow(back,SW_HIDE);
+#ifdef MERO_AGENT_BUILD
+            if(!agentOn)
+#endif
+                SetForegroundWindow(h);}
         if(lastRequest&&GetTickCount()-lastRequest<5000)SetForegroundWindow(h);
         return 0;}
     if(msg==WM_BT_RESULT){InvalidateRect(h,NULL,TRUE);return 0;}
-    if(msg==WM_LBUTTONUP&&!mero_standby){int x=LOWORD(l),y=HIWORD(l);if(busy)return 0;
+    if(msg==WM_LBUTTONUP&&!mero_standby){int x=LOWORD(l),y=HIWORD(l);
+#ifdef MERO_AGENT_BUILD
+        if(x>=325&&y<33){if(agentOn){InterlockedExchange(&agentReconnect,0);InterlockedExchange(&agentOn,0);Note(L"Agent will pause after the current operation");}else if(!busy){InterlockedExchange(&agentOn,1);Run(4);}InvalidateRect(h,NULL,TRUE);return 0;}
+        if(x>=330&&y>=193&&y<226){MeroReturnToShell();ShowWindow(h,SW_HIDE);return 0;}
+#endif
+        if(busy)return 0;
         if(x<320&&y>=44&&y<194){int row=(y-44)/25;int start=selected/6*6;if(start+row<count)selected=start+row;InvalidateRect(h,NULL,TRUE);}
         else if(x>=330&&y>=38&&y<226){int b=(y-38)/31;if(b==0){lastRequest=GetTickCount();Run(0);}else if(b==1)Run(2);else if(b==2)Run(3);
-            else if(b==3){if(selected>0)selected--;InvalidateRect(h,NULL,TRUE);}else if(b==4){if(selected+1<count)selected++;InvalidateRect(h,NULL,TRUE);}else DestroyWindow(h);}
+            else if(b==3){if(selected>0)selected--;InvalidateRect(h,NULL,TRUE);}else if(b==4){if(selected+1<count)selected++;InvalidateRect(h,NULL,TRUE);}else {MeroReturnToShell();DestroyWindow(h);}}
         return 0;}
     if(msg==WM_PAINT){PAINTSTRUCT ps;HDC dc=BeginPaint(h,&ps);RECT r={0,0,480,272};HBRUSH black=CreateSolidBrush(RGB(8,14,20));FillRect(dc,&r,black);DeleteObject(black);
         SetBkMode(dc,TRANSPARENT);SetTextColor(dc,RGB(80,220,180));DrawTextW(dc,L"MERO BLUETOOTH FILES",-1,&(RECT){12,5,470,32},DT_LEFT);
+#ifdef MERO_AGENT_BUILD
+        SetTextColor(dc,RGB(255,210,100));DrawTextW(dc,agentOn?L"[AGENT ON]":L"[AGENT OFF]",-1,&(RECT){325,5,477,32},DT_LEFT);
+#endif
         int i,start=selected/6*6;for(i=0;i<6&&start+i<count;i++){WCHAR line[100];MultiByteToWideChar(CP_ACP,0,names[start+i],-1,line,100);
             SetTextColor(dc,start+i==selected?RGB(255,230,120):RGB(200,210,220));DrawTextW(dc,line,-1,&(RECT){14,44+i*25,320,69+i*25},DT_LEFT|DT_SINGLELINE|DT_END_ELLIPSIS);}
         const WCHAR *buttons[]={L"CONNECT / LIST",L"DOWNLOAD FILE",L"UPLOAD TEST",L"PREVIOUS",L"NEXT",L"BACK"};SetTextColor(dc,RGB(100,190,255));
@@ -198,8 +243,19 @@ static LRESULT CALLBACK WndProc(HWND h,UINT msg,WPARAM w,LPARAM l) {
 }
 int WINAPI WinMain(HINSTANCE instance,HINSTANCE prev,LPWSTR cmd,int show) {
     WNDCLASSW wc;MSG m;WSADATA data;(void)prev;(void)cmd;(void)show;
+    HWND existing=FindWindowW(BT_WINDOW_CLASS,NULL);
+    if(existing){
+#ifdef MERO_AGENT_BUILD
+        if(cmd&&wcsstr(cmd,L"--connect"))PostMessageW(existing,RegisterWindowMessageW(L"MERO_AGENT_CONNECT_V1"),1,0);
+#endif
+        if(!cmd||!wcsstr(cmd,L"--background")){ShowWindow(existing,SW_SHOW);SetForegroundWindow(existing);}return 0;
+    }
     if(WSAStartup(MAKEWORD(2,0),&data)){MessageBoxW(NULL,L"Winsock unavailable",L"Mero BT",MB_OK);return 1;}
-    memset(&wc,0,sizeof(wc));wc.lpfnWndProc=WndProc;wc.hInstance=instance;wc.lpszClassName=L"MERO_BT_FILES";RegisterClassW(&wc);
+    memset(&wc,0,sizeof(wc));wc.lpfnWndProc=WndProc;wc.hInstance=instance;wc.lpszClassName=BT_WINDOW_CLASS;RegisterClassW(&wc);
     window=CreateWindowExW(WS_EX_TOPMOST,wc.lpszClassName,L"Mero Bluetooth Files",WS_VISIBLE|WS_POPUP,0,0,480,272,NULL,NULL,instance,NULL);
+#ifdef MERO_AGENT_BUILD
+    InterlockedExchange(&agentOn,1);Run(4);
+    if(cmd&&wcsstr(cmd,L"--background"))ShowWindow(window,SW_HIDE);
+#endif
     while(GetMessageW(&m,NULL,0,0)){TranslateMessage(&m);DispatchMessageW(&m);}WSACleanup();return 0;
 }

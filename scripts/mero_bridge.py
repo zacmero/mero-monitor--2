@@ -15,6 +15,8 @@ import subprocess
 import socket
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from companion_live import BluetoothLive, music_state, music_line
+from companion_art import Artwork
 
 DEFAULT_MOUNT = Path("/run/media/zacmero/6232-3562")
 DEV_UUID = "6232-3562"
@@ -519,6 +521,10 @@ def main():
     executor = ThreadPoolExecutor(max_workers=1)
     future = None
     next_fetch = 0.0
+    bluetooth = BluetoothLive()
+    artwork = Artwork(bluetooth.share)
+    next_live = 0.0
+    media = None
     try:
         while True:
             now = time.monotonic()
@@ -531,10 +537,25 @@ def main():
                 next_fetch = now + (WEATHER_INTERVAL if latest_weather_line and time.time() - last_weather_fetch < WEATHER_INTERVAL else 60)
             if future is None and now >= next_fetch:
                 future = executor.submit(fetch_weather)
-            send_stream(f"MERO:POWER:standby={int(cinema_active())}")
+            power = f"MERO:POWER:standby={int(cinema_active())}"
+            send_stream(power)
+            weather = ""
             if latest_weather_line:
                 age = int(max(0, time.time() - last_weather_fetch))
-                send_stream(latest_weather_line + f"|age={age}")
+                weather = latest_weather_line + f"|age={age}"
+                send_stream(weather)
+            if now >= next_live:
+                media = music_state()
+                art = artwork.update(media)
+                if media: media["art"] = art
+                music = music_line(media)
+                send_stream(music)
+                try:
+                    bluetooth.publish([power, music] + ([weather] if weather else []), art=art,
+                                      art_track=media["track"] if media and art else "")
+                except (OSError, ValueError) as error:
+                    print(f"[!] Bluetooth live feed: {error}")
+                next_live = time.monotonic() + 2
             time.sleep(0.5)
     except KeyboardInterrupt:
         print("[+] Bridge stopped.")
@@ -544,6 +565,7 @@ def main():
         if stream_listener is not None:
             stream_listener.close()
         executor.shutdown(wait=True)
+        artwork.close()
 
 
 if __name__ == "__main__":

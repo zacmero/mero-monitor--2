@@ -24,6 +24,7 @@
 #define STBI_ONLY_PNG
 #define STBI_ONLY_BMP
 #include "stb_image.h"
+#include "../mero-shell-return.h"
 
 #define GALLERY_VERSION        L"0.1.0"
 #define TIMER_ID_SLIDESHOW     1
@@ -752,16 +753,7 @@ static void ExitGallery(void)
     KillTimer(g_hWnd, TIMER_ID_SLIDESHOW);
     KillTimer(g_hWnd, TIMER_ID_OSD_HIDE);
 
-    /* Relaunch Mero Shell before closing (try SDMMC first, then ResidentFlash) */
-    PROCESS_INFORMATION pi;
-    memset(&pi, 0, sizeof(pi));
-    if (!CreateProcessW(L"\\SDMMC\\MERO\\mero-shell.exe", NULL, NULL, NULL, FALSE, 0, NULL, NULL, NULL, &pi)) {
-        CreateProcessW(L"\\ResidentFlash\\MERO\\mero-shell.exe", NULL, NULL, NULL, FALSE, 0, NULL, NULL, NULL, &pi);
-    }
-    if (pi.hProcess) {
-        CloseHandle(pi.hProcess);
-        CloseHandle(pi.hThread);
-    }
+    MeroReturnToShell();
 
     DestroyWindow(g_hWnd);
 }
@@ -1150,6 +1142,8 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         OnPaint(hWnd);
         return 0;
 
+    case WM_CLOSE:
+        MeroReturnToShell();DestroyWindow(hWnd);return 0;
     case WM_DESTROY:
         MeroLiveClose(hWnd);
         KillTimer(hWnd, TIMER_ID_MOTION);

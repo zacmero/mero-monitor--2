@@ -4,6 +4,18 @@ Repurposing a Foston FS-460BT Windows CE GPS device into a dedicated `Mero Thoug
 
 Current repair notes, live USB setup, cinema standby, gallery profiles, deployment backups, and hardware verification limits: [docs/REPAIR.md](docs/REPAIR.md).
 
+Companion work now adds signed Bluetooth weather/music/cinema telemetry, a
+YouTube Music remote and one app catalogue under **01 – Companion Labs**.
+**02 – Default App** saves a startup choice; app exits return home without
+starting that choice again. The existing boot chain and resident recovery stay
+in place. Physical cold-power startup still needs a device test.
+
+Ideas and priorities: [Companion roadmap](docs/COMPANION_ROADMAP.md).
+
+The source also includes startup/reconnect hardening and OEM-evidenced USB
+mode control. These latest changes are built and tested offline; their device
+deployment and cold-power validation remain for the next session.
+
 ## Verified milestone: Bluetooth file transfer
 
 On November 5, 2026, the Foston downloaded and ran `mero-bt.exe` over Bluetooth. The custom app then listed the PC share, downloaded a proof file, and uploaded its 42-byte test payload. The PC verified the upload byte for byte. USB mounting was not needed.
@@ -15,6 +27,22 @@ On November 5, 2026, the Foston downloaded and ran `mero-bt.exe` over Bluetooth.
 - The current client targets the already paired mero-machine adapter, `8C:86:DD:83:27:70`. It supports a flat directory of ASCII filenames; new-device pairing and nested browsing remain future work.
 
 The PC serves `~/.local/share/mero-foston-bluetooth/` through `mero-bt-ftp.service`. See the [host setup](host/bridge/README.md) and [verified setup notes](docs/REPAIR.md). Resident flash and boot configuration are preserved.
+
+## Agent-controlled updates
+
+The keyed `mero-agent.exe` can stay running behind the custom shell. On mero-machine, agents can inspect, retrieve, update and roll back files, and launch or stop named Mero apps:
+
+```bash
+rtk proxy python3 scripts/foston_agent.py status
+rtk proxy python3 scripts/foston_agent.py ls /SDMMC/MERO
+rtk proxy python3 scripts/foston_agent.py get /SDMMC/MERO/mero-bt.log /tmp/mero-bt.log
+rtk proxy python3 scripts/foston_agent.py put local.cfg /SDMMC/MERO/example.cfg
+rtk proxy python3 scripts/foston_agent.py rollback JOB_NUMBER
+```
+
+Commands/results are signed per device, file hashes are verified, and backups remain on SD. A timeout leaves the job pending: use `wait`, not an automatic replay. The workflow was verified on hardware, including upgrading the agent itself and deploying shell 0.2.13 over Bluetooth; the user confirmed the updated shell is usable while the agent remains available.
+
+Read [AGENTS.md](AGENTS.md) for the operating contract, provisioning, app-update sequence and recovery rules. The agent must be running with **AGENT ON**, and USB must remain in ActiveSync/PC Link. Boot configuration is unchanged; after a power loss the configured navigation app may need to be opened again.
 
 ---
 
