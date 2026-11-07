@@ -103,3 +103,23 @@ Scope: read-only probing, backup audit and offline reverse engineering. No firmw
 - [x] Write an initial firmware research report and next-session handoff with verified facts and unresolved hypotheses.
 
 User requested Ambient Home opened in portrait first; leave it visible while research proceeds.
+
+## Mero Terminal and two-way keyboard — 2026-11-07
+
+User approved a persistent PC terminal, compact fastfetch, touch keyboard and PC keyboard forwarding into Foston apps. Firmware investigation waits.
+
+- [x] Reuse signed live events/snapshots and inspect the local terminal startup.
+- [x] Add a bounded persistent host terminal and explicit PC keyboard frontend.
+- [x] Add native terminal app, touch input, orientation, shell/default entry and targeted keyboard reception.
+- [x] Exercise actual host/native logic, build, back up, deploy and verify both input paths and background mode on hardware.
+- [x] Document usage, installed evidence, permanent new-machine permissions and remaining limitations.
+
+## Terminal latency and duplicate input regression — 2026-11-07
+
+User reports very slow refresh and duplicated input with both physical and touch keys, including top. Inspect and reproduce actual delivery counts, remove avoidable polling/round-trip delays, test exact key delivery and interactive refresh, deploy backed up and record measured limits.
+
+- [x] Reproduce mirrored input in actual reader tests and measure the current pipeline on hardware.
+- [x] Fix input delivery and polling; add authenticated bounded compression with compatibility fallback.
+- [ ] Test, deploy and measure on hardware; document actual behavior and limits.
+
+User ended work for sleep. Preserve the open latency issue and resume from the top of docs/NEXT_SESSION.md. Current code is deployed and tests pass, but the latest isolated round trip remains6314ms; no reliable speed fix is claimed. Complete commits/push/handoff only tonight; no further experiments.

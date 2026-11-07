@@ -1,5 +1,62 @@
 # Foston handoff — 2026-11-07
 
+## STOP HERE: overnight checkpoint — terminal latency still unresolved
+
+User explicitly ended work for sleep and requested commits/push plus tomorrow's handoff. Resume **perfecting Mero Terminal**, ahead of firmware research. Do not describe the speed problem as fixed. The user reported very slow refresh and duplicated top/keys with both physical and touch input.
+
+Source checkpoints: `66a5290` (terminal, seamless keyboard and transport work) and `0d694fb` (isolated latency probe). The following handoff commit preserves the exact installed state and open investigation. Full root make/make check and whitespace checks passed before publication. User requests continuing to commit/push meaningful future milestones, with device backups as well as Git checkpoints.
+
+Latest installed/verified state:
+
+- Agent upgrade595/status623: `9b3488c3aa3cf4a0ca852eb750567f8b390774b823a5ab366514cd07e295a0df`; agent backup `BT/AgentUpdate/old-7172786efe30cb64.exe`. Navigation path stays `SDMMC/BT/Downloads/101907-mero-agent.exe`. The CLI intentionally archives/removes the local keyed build after upgrade; absence of wince/bluetooth/mero-agent.exe does not mean the device lost it.
+- Terminal put/backup597, exact readback598, launch599:31,744 bytes, SHA256 `18d00491984e3b6bd86fdfe07fde704691b65969c6def4adccd78dc910d77e60`. Source and device match. Shared layout is unchanged, portrait currently32×26 text cells. Physical capture is OFF; no desktop keyboard window. Bash session is retained.
+- Shell0.3.7 and other keyboard-enabled apps remain the versions listed below. Default startup preference, Launch50, recovery copies and pairing were preserved. Status623: agent_ready, live age0s,38MB free; live GET393ms, accepted-frame period528ms, wire frame1401 bytes. Those are reception metrics, not a promised UI frame rate.
+- The last signed status read623 completed and retired normally. Verify no pending.json before starting tomorrow; do not reset its sequence. The temporary pending file observed during that status call was the in-flight read itself.
+
+Implemented and tested, with current limitations:
+
+- The real PC Bash/tmux terminal, compact **ArchMerOS** fastfetch, touch keyboard, portrait/landscape, shell/default entry and persistent PC session work. A PC→Foston→PC command round trip and portrait touch pwd were previously verified.
+- Seamless physical keyboard capture stays inside mero-bridge. No extra Hyprland/WezTerm window is wanted. User completed permanent scoped udev setup; uaccess tags and active-user ACLs were verified. See INSTALLATION.md for new machines. PC KEYS hides touch keys; TOUCH releases grabs. Do not revert to temporary per-session sudo/setfacl as the normal solution.
+- Both CASUE interfaces advertise every typing key. Capture grabs both but selects one actual typing source, filters repeated DOWN/orphan repeat, and keeps genuine held-key repeats. Native touch uses one DOWN per UP/focus-loss, plus pressed-key highlighting and a SENDING footer. Actual reader/native C regression tests pass. Human confirmation after these fixes remains useful; do not claim all duplicated-key reports are proven resolved on hardware.
+- Input is processed before capturing the outgoing frame. Music polling runs separately. Foreground presence is carried outside the one-command input mailbox. Pending device input uploads before screen GET; duplicate uploads are cached. Signed job-sequence hints avoid idle job GETs, with timed fallback if hints are missing/stale. Original command authentication, durable sequence/replies and unknown-outcome rules are unchanged.
+- Zlib snapshots negotiate via signed per-bridge nonce/epoch leases. Inflation uses the existing stb decoder, checks checksum, rejects NULs and stays within4096-byte output. Old/rolled-back agents fall back to plain state after lease expiry. Socket writes remain≤256 bytes; PUT PDUs remain≤512 bytes. Tests cover actual native decode, malformed data/output bounds, lease fallback and scheduler/tick wrap. ASCII output/no ANSI colors and incomplete dead-key composition remain initial-build limits.
+
+### Findings that matter tomorrow
+
+**The latest isolated test still took6314ms from application input to received output frame**, with queued137ms and ack5786ms, exactly one output marker. Private report: `/tmp/foston-terminal-deploy/latency-isolated.txt`; get619, SHA256 `2b1310fdd4469ffd061479652a38afa30478b25b621c35b1c761fb47d3934e8c`. The helper deferred injection10s; host launch RPC finished at1.511s, and no other agent RPC ran until36s. This supersedes the earlier hypothesis that launch journaling alone explained the delay.
+
+Host-side observation for that same run: event arrived at16.996s after launch, with created-age6.516s; PC output was published at17.158s, only162ms later. The long delay is principally **between the native queued event and its arrival on the PC**, not ordinary Bash execution or PC frame generation. Received frames otherwise progressed around0.4–0.5s. No stable input-speed gain has been demonstrated; do not quote provisional earlier runs as a successful before/after benchmark.
+
+The native filesystem timing helper also ruled out the simple Temp-flush theory: Temp create0/write3/flush0/close0ms; SD create4/write5/flush0/close118ms. Private report `/tmp/foston-terminal-deploy/file-timing.txt`, job622. That temporary helper is not a firmware probe and only wrote its owned scratch/report files.
+
+Next focused investigation:
+
+1. Instrument first **AgentLiveEvent** send start/end and queue-to-send timing, rather than repeatedly reducing scheduling intervals. Existing live_send_ms can be overwritten by a later retry and does not show the first attempt's full history.
+2. A promising **untested** packet hypothesis: AgentSend permits512-byte PUT PDUs while TransferBytes splits writes at256 bytes. Short control events can therefore span two native writes. Test a256-byte PUT-PDU cap **only for control files** (live-event, keyboard-result, live-codec), retaining512 for bulk transfers. This would stay inside existing bounds; it was NOT applied before sleep. Check transport behavior and signed replies, not just compilation.
+3. The diagnostic probe polls the shared mutex every10ms; an observer effect from zero-timeout lock contention is another unproven hypothesis. Compare a lower polling rate and add per-event timing if needed.
+4. Re-test one actual touch press (including release) and physical typing, then top. Rebuilt `mero-terminal-touch.exe` (put571) sends three DOWN messages followed by one UP per key to test suppression; it has not yet been run against the final build. Old test helpers that emit only DOWN are invalid after the new press guard. Local corrected mode/PC-key helpers are in `/tmp/mero-terminal-touch/`; they were compiled but their updated versions were not deployed.
+5. Only consider a dedicated RFCOMM stream after locating the delay. Existing OpenPeer documents verified AF_BT32/RFCOMM3,40-byte address and UUID layout. dbus/gi exist on the host. No SPP profile registration/connection experiment was performed. Never guess hardware IOCTLs or flash firmware to solve this app issue.
+
+`mero-terminal-latency.exe` is installed (put614),19,456 bytes, SHA256 `b68fb565683ecaa3de8ff9dd7bfe3ea1645a83ced3254f8f193863376e60c6e8`. It waits10s, injects a unique harmless printf and reports input-to-RAM-frame reception. Let it finish (up to30s total) without agent jobs, then retrieve terminal-latency.txt and verify a fresh ID. The first deferred driver read too early and received an old report; freshness checks correctly rejected it. Do not re-launch merely because a read was stale.
+
+### Checkpoint and rollback
+
+Build/tests, native helper build, rule validation and whitespace checks are recorded in the checkpoint commits. Generated/keyed executables, OEM files, device journals and private evidence remain outside Git. **A Git checkout/revert does not roll back the installed device.** For public apps, stop the named app, use the signed PUT backup/rollback reference or rebuild and deploy with backup/readback. For the keyed agent, use the protected upgrade workflow with the existing key; never copy over/kill the live agent, reset counters or discard pending jobs. Preserve all current recovery and configuration files.
+
+## Mero Terminal and seamless keyboard — latest 2026-11-07
+
+User prioritized this app before further firmware research. **01 – COMPANION LABS → Mero Terminal**, new startup ID17; old optional terminal and prior startup IDs/default preference preserved. Shell0.3.7 deployed474/readback475: b6e78849630d19dd6b2cfaddb59c246c0dec162462adf0efc870abfc0840e3cd,66,560 bytes. Terminal final put/backup529/readback530: 8ec22febaee2888c31f1c913d99d85ff4834195a015ad68b151ec94f5cd4c651,30,720 bytes; launched531. Firmware work remains read-only and deferred.
+
+Agent upgrade status521 verified d94c8f18fbc851b5f22d236b0553e4bd53d8d0f77432bfb2fa81986838374866; backup BT/AgentUpdate/old-0996c52f2a19c7b2.exe. Native keyboard delivery is limited to supported custom foreground classes, journals intent before delivery and signs acknowledgements. Generic foreground selection still rejects OEM/system/agent windows. No boot/nav configuration changed.
+
+PC KEYS engages physical keyboard forwarding inside the existing bridge; TOUCH releases it and restores the native touch keys. **Do not open an extra Hyprland/WezTerm forwarding window**: the user explicitly rejected that earlier approach. Keyboard capture uses the active Hyprland layout via libxkbcommon. Device errors, input timeout, desktop lock/inactivity or bridge exit release grabs. Ctrl+Alt+Escape is an emergency release. Rapid mode clicks retain requested mode while waiting for Bluetooth acknowledgement.
+
+The permanent keyboard-access rule is installed on mero-machine and user-confirmed. Verified uaccess tags and user ACLs on both CASUE interfaces. No per-use sudo is needed. Setup for another machine, optional keyboard IDs and stable by-id device configuration: [INSTALLATION.md](INSTALLATION.md). Details: [MERO_TERMINAL.md](MERO_TERMINAL.md).
+
+Hardware evidence: native screenshot488/489 showed compact fastfetch; PC→Foston→PC input printed PC_KEYBOARD_OK once; portrait touch helper491 typed pwd and returned /home/zacmero. Managed tmux pane PID1577082 survived bridge restarts. Latest mode test532 observed0→1→0, both actual keyboard event handles open in the bridge during PC mode, and zero forwarding windows. Raw physical key translation tests exercise installed libxkbcommon (including Shift/Ctrl); a human key press after the seamless change remains a useful confirmation. Terminal ASCII cells use an embedded licensed bitmap because all tested OEM font names fell back to proportional Tahoma. Compact fastfetch now matches the user’s ArchMerOS branding and displays user/host, kernel, Bash, Hyprland, uptime and RAM; the live session was refreshed. Screenshot533/get534 verified restored touch keys and readable text.
+
+Other apps updated with keyboard controls and exact readbacks: Ambient477/478 (4b6e76ab5b8a9059ac1fc041ad7a97ce7a23f5e2b0bdeb050a682c32c5bb68a9), Backlight480/481 (56f66dd6a4d370c960944c67bd005ce3868f6305ac4963bea995653864a3372c), Music483/484 (ca778a27cf33177193cc780623103d0bb4a1c7e9ec58b87b69c48c49460bdf74). Earlier Ambient/photo changes remain intact. Current terminal milestone changes are uncommitted. Full make check, native builds, shell syntax, udev verification and whitespace checks passed.
+
 ## Latest installed state — 2026-11-07
 
 Milestone source commits: `0f86777` (Ambient Home, native brightness and shell/file controls) and `d1080b5` (read-only firmware inventory). Full `rtk make`, `rtk make check`, optional probe builds and diff checks passed again before publication. Older entries below are chronological evidence; use this section for the latest installed state.
