@@ -193,3 +193,7 @@ Benchmark audit: initial immediate-injection timing results were confounded by t
 - Portrait code committed/pushed0e542bc; control transport committed454cfe4. Final Music launch655; retaining existing terminal Bash/session and physical keyboard capture off. Remaining terminal variable latency and human duplicate-input verification documented.
 
 - Final music screenshot656/get657 matched the already inspected portrait image byte-exactly (SHA1677f905…); foreground Music, no PC playback session.
+
+### Portrait music: edge-to-edge cover
+- User requested larger song artwork reaching the screen edge. Draw the same bounded112x112 RAM source into a272x272 portrait square at x0,y36, with song text/progress/buttons below. Landscape retained. Portrait controls moved to y421 and touch mapping fixture updated.
+- Full make/check and diff check passed. Stop658/put659 backed up the previous deck;180638B SHA25693f73cf9da319731d1203485905f4112ce31d569a4818cfc5106bee3f3f1f973. GET660 byte-exact read-back confirmed. Launch661, screenshot662/get663 visually verified actual playing cover (Up on the Hill) reaching both edges, with text and controls below.

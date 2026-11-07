@@ -85,8 +85,8 @@ static unsigned int CurrentPosition(void) {
     if(duration && p>duration)p=duration;
     return p;
 }
-static void Artwork(HDC dc,int ax,int ay) {
-    RECT area={ax,ay,ax+112,ay+112};HBRUSH brush=CreateSolidBrush(RGB(13,25,30));int ready=0;
+static void Artwork(HDC dc,int ax,int ay,int side) {
+    RECT area={ax,ay,ax+side,ay+side};HBRUSH brush=CreateSolidBrush(RGB(13,25,30));int ready=0;
     FillRect(dc,&area,brush);DeleteObject(brush);
     if(artHash[0]&&MeroArtOpen()&&MeroBusLock()) {
         if(!strcmp(mero_art->sha,artHash)&&!strcmp(mero_art->track,track)) {
@@ -106,13 +106,13 @@ static void Artwork(HDC dc,int ax,int ay) {
         }
         ReleaseMutex(mero_bus_mutex);
     }
-    if(ready)BitBlt(dc,ax,ay,MERO_ART_SIDE,MERO_ART_SIDE,artDC,0,0,SRCCOPY);
-    else Text(dc,smallFont,RGB(110,155,165),artHash[0]?L"Cover loading":L"YouTube Music",ax+4,ay+37,ax+108,ay+79,DT_CENTER|DT_WORDBREAK);
+    if(ready)StretchBlt(dc,ax,ay,side,side,artDC,0,0,MERO_ART_SIDE,MERO_ART_SIDE,SRCCOPY);
+    else Text(dc,smallFont,RGB(110,155,165),artHash[0]?L"Cover loading":L"YouTube Music",ax+4,ay+side/2-21,ax+side-4,ay+side/2+21,DT_CENTER|DT_WORDBREAK);
 }
 static void Paint(HWND h) {
     PAINTSTRUCT ps; HDC screen=BeginPaint(h,&ps),dc=CreateCompatibleDC(screen);
     int width=portrait?272:480,height=portrait?480:272;
-    int barY=portrait?333:161,buttonsY=portrait?375:193,step=portrait?86:156;
+    int barY=portrait?390:161,buttonsY=portrait?421:193,step=portrait?86:156;
     DWORD *canvas=NULL;BITMAPINFO bi;HBITMAP bitmap,old;
     RECT all={0,0,width,height},progress={18,barY,width-18,barY+8};HBRUSH b;
     memset(&bi,0,sizeof(bi));bi.bmiHeader.biSize=sizeof(BITMAPINFOHEADER);
@@ -124,9 +124,9 @@ static void Paint(HWND h) {
     FillRect(dc,&all,(HBRUSH)GetStockObject(BLACK_BRUSH));SetBkMode(dc,TRANSPARENT);
     Text(dc,smallFont,RGB(60,220,190),L"YOUTUBE MUSIC",16,10,width-85,30,DT_SINGLELINE);
     Text(dc,bodyFont,RGB(255,120,110),L"SHELL",width-80,7,width-2,38,DT_CENTER|DT_VCENTER|DT_SINGLELINE);
-    Artwork(dc,portrait?80:16,portrait?48:43);
-    Text(dc,titleFont,RGB(235,244,250),title,portrait?16:144,portrait?178:45,width-14,portrait?265:106,DT_WORDBREAK|DT_END_ELLIPSIS);
-    Text(dc,bodyFont,RGB(120,200,210),artist,portrait?16:145,portrait?274:113,width-18,portrait?322:152,DT_WORDBREAK|DT_END_ELLIPSIS);
+    Artwork(dc,portrait?0:16,portrait?36:43,portrait?272:112);
+    Text(dc,titleFont,RGB(235,244,250),title,portrait?16:144,portrait?312:45,width-14,portrait?360:106,DT_WORDBREAK|DT_END_ELLIPSIS);
+    Text(dc,bodyFont,RGB(120,200,210),artist,portrait?16:145,portrait?360:113,width-18,portrait?383:152,DT_WORDBREAK|DT_END_ELLIPSIS);
     b=CreateSolidBrush(RGB(24,43,49));FillRect(dc,&progress,b);DeleteObject(b);
     if(duration){progress.right=18+(int)((width-36.0)*pos/duration);b=CreateSolidBrush(RGB(60,220,190));FillRect(dc,&progress,b);DeleteObject(b);
         wsprintfW(timing,L"%u:%02u / %u:%02u",pos/60,pos%60,duration/60,duration%60);
@@ -152,8 +152,8 @@ static void Paint(HWND h) {
     if(!haveState)lstrcpyW(state,L"Waiting for AGENT ON + PC bridge");
     else if(!Fresh())lstrcpyW(state,track[0]?L"Offline // last track cached":L"No active YouTube Music session");
     else wsprintfW(state,L"Bluetooth connected // %s",!strcmp(playback,"PLAYING")?L"playing":L"paused");
-    Text(dc,smallFont,Fresh()?RGB(80,210,170):RGB(240,180,80),state,14,height-31,width-12,height-17,DT_SINGLELINE);
-    Text(dc,smallFont,RGB(120,145,155),notice,14,height-15,width-12,height-1,DT_SINGLELINE|DT_END_ELLIPSIS);
+    Text(dc,smallFont,Fresh()?RGB(80,210,170):RGB(240,180,80),pending&&portrait?notice:state,14,portrait?466:height-31,width-12,portrait?480:height-17,DT_SINGLELINE|DT_END_ELLIPSIS);
+    if(!portrait)Text(dc,smallFont,RGB(120,145,155),notice,14,height-15,width-12,height-1,DT_SINGLELINE|DT_END_ELLIPSIS);
     if(portrait&&canvas){DWORD *bits=NULL;HDC rotated=CreateCompatibleDC(screen);HBITMAP rb,ro;
         bi.bmiHeader.biWidth=480;bi.bmiHeader.biHeight=-272;
         rb=CreateDIBSection(screen,&bi,DIB_RGB_COLORS,(void**)&bits,NULL,0);
@@ -174,7 +174,7 @@ static LRESULT CALLBACK WindowProc(HWND h,UINT msg,WPARAM w,LPARAM l) {
         else if(Fresh()&&w==VK_RIGHT&&canNext)MeroBusCommand("next",track,0);return 0;}
     if(msg==WM_CHAR&&w==' '&&!mero_standby){if(Fresh()&&canPlay)MeroBusCommand("playpause",track,0);return 0;}
     if(msg==WM_LBUTTONDOWN&&!mero_standby){int x=LOWORD(l),y=HIWORD(l),ok=0;
-        int width=portrait?272:480,buttonsY=portrait?375:193,step=portrait?86:156,barY=portrait?333:161;
+        int width=portrait?272:480,buttonsY=portrait?421:193,step=portrait?86:156,barY=portrait?390:161;
         MusicCoordinates(&x,&y);
         if(x>=width-88&&y<40){MeroReturnToShell();DestroyWindow(h);return 0;}
         if(Fresh()) {

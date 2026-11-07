@@ -34,8 +34,8 @@ static void Wide(WCHAR *out,int cap,const char *s){int i;for(i=0;s[i]&&i<cap-1;i
 tests=r'''
 static void frame(const char *text){char line[1024];strcpy(line,text);HostLine(line);}
 int main(void){
- int x=479-395,y=137;
- MusicCoordinates(&x,&y);assert(x==137&&y==395); /* Portrait play button. */
+ int x=479-441,y=137;
+ MusicCoordinates(&x,&y);assert(x==137&&y==441); /* Portrait play button. */
  portrait=0;x=240;y=210;MusicCoordinates(&x,&y);assert(x==240&&y==210);
  portrait=1;
  frame("MERO:AMB:folder=test|portrait=0|weather=1");assert(!portrait&&!haveState);
