@@ -3,6 +3,8 @@
 #include "../mero-live-codec.h"
 #include "../mero-art.h"
 #include <tlhelp32.h>
+#include "../mero-photo-codec.h"
+static DWORD photoGetMs,photoDecodeMs,photoBytes;
 static unsigned char agentKey[32];
 static WCHAR agentRoot[160];
 static unsigned int agentLast;
@@ -16,6 +18,8 @@ static void AgentStatusExtras(char *result,unsigned int cap) {
     }
     unsigned int len=strlen(result);
     snprintf(result+len,cap-len,"boot_launch50=%s\n",boot);
+    len=strlen(result);
+    snprintf(result+len,cap-len,"photo_bytes=%lu\nphoto_get_ms=%lu\nphoto_decode_ms=%lu\n",photoBytes,photoGetMs,photoDecodeMs);
     if(MeroBusLock()) {
         len=strlen(result);
         snprintf(result+len,cap-len,"live_generation=%lu\nlive_age_sec=%lu\nlive_weather=%d\nlive_music=%d\nlive_ack=%s\nlive_result=%s\n",
@@ -137,6 +141,33 @@ done:
     if(ok)strcpy(message,"complete");
     snprintf(result,2049,"v=1\ndevice=%s\nseq=%u\nop=%s\nok=%d\nmessage=%s\nerror=%lu\nsize=%u\nsha256=%s\nvalue=%u\n",MERO_AGENT_DEVICE,seq,op,ok,message,ok?0:GetLastError(),size,sha,value);
 }
+#include "../mero-ambient.h"
+static void AgentAmbient(const char *sha) {
+    char file[96],actual[65];BYTE digest[32];unsigned int n;AuthHash hash;
+    DWORD started,downloaded;unsigned short *pixels;
+    if(!FindWindowW(L"MERO_AMBIENT",NULL)) {
+        if(mero_ambient&&MeroBusLock()){memset(mero_ambient,0,sizeof(*mero_ambient));ReleaseMutex(mero_bus_mutex);MeroAmbientClose();}
+        return;
+    }
+    if(strlen(sha)!=64||!AuthUnhex(sha,digest,32)||!MeroAmbientOpen())return;
+    if(!MeroBusLock())return;
+    if((DWORD)(GetTickCount()-mero_ambient->demandTick)>5000){ReleaseMutex(mero_bus_mutex);return;}
+    if(!strcmp(mero_ambient->sha,sha)){ReleaseMutex(mero_bus_mutex);return;}
+    ReleaseMutex(mero_bus_mutex);
+    snprintf(file,sizeof(file),"ambient-%s.565",sha);
+    started=GetTickCount();
+    if(!GetBody(file,NULL,INVALID_HANDLE_VALUE,&n)){ClosePeer();return;}
+    downloaded=GetTickCount();
+    AuthInit(&hash);AuthUpdate(&hash,xml,n);AuthFinal(&hash,digest);AuthHex(digest,32,actual);
+    if(strcmp(actual,sha))return;
+    pixels=(unsigned short*)malloc(MERO_AMBIENT_BYTES);if(!pixels)return;
+    if(MeroPhotoDecode((unsigned char*)xml,n,pixels)&&FindWindowW(L"MERO_AMBIENT",NULL)&&MeroBusLock()) {
+        memcpy(mero_ambient->pixels,pixels,MERO_AMBIENT_BYTES);strcpy(mero_ambient->sha,sha);
+        photoBytes=n;photoGetMs=downloaded-started;photoDecodeMs=GetTickCount()-downloaded;
+        ReleaseMutex(mero_bus_mutex);
+    }
+    free(pixels);
+}
 static void AgentArtwork(const char *sha,const char *track) {
     char file[96],actual[65];BYTE digest[32];unsigned int n,i;AuthHash hash;
     if(!FindWindowW(L"MERO_MUSIC",NULL)) {
@@ -162,7 +193,7 @@ static void AgentLive(void) {
     static char serial[40] = "";
     static int sawFirst;
     char body[8193], version[8], device[32], next[40], epoch[24], data[5600];
-    char lines[MERO_BUS_BYTES], ack[80], result[96], event[2049],art[65]="",artTrack[32]="";
+    char lines[MERO_BUS_BYTES], ack[80], result[96], event[2049],art[65]="",artTrack[32]="",ambient[65]="";
     unsigned int n, stamp;
     if (channel == INVALID_SOCKET) return;
     if (!GetBody("live-state.txt", NULL, INVALID_HANDLE_VALUE, &n)) { ClosePeer(); return; }
@@ -183,6 +214,7 @@ static void AgentLive(void) {
        Require two increasing snapshots before publishing after agent startup. */
     if(!sawFirst){strcpy(serial,next);sawFirst=1;return;}
     AgentGet(body,"art",art,sizeof(art));AgentGet(body,"art_track",artTrack,sizeof(artTrack));
+    AgentGet(body,"ambient",ambient,sizeof(ambient));
     event[0] = 0;
     if (!MeroBusLock()) return;
     if (strcmp(serial,next)) {
@@ -200,6 +232,7 @@ static void AgentLive(void) {
             !AgentSend("live-event.txt",L"\\Temp\\MeroLiveEvent.txt")) ClosePeer();
     }
     if(channel!=INVALID_SOCKET)AgentArtwork(art,artTrack);
+    if(channel!=INVALID_SOCKET)AgentAmbient(ambient);
 }
 static void AgentLoop(void){
     HANDLE mutex=NULL;char body[2049],op[32],number[32],device[32],version[8],result[2049];unsigned int n,seq,sent=0;
@@ -216,6 +249,15 @@ static void AgentLoop(void){
     while(agentOn){
         if(InterlockedExchange(&agentReconnect,0))ClosePeer();
         if(channel==INVALID_SOCKET&&!OpenPeer())goto pause;
+        {LONG action=InterlockedExchange(&agentManualAction,-1);
+            if(action>=0){
+                InterlockedExchange(&agentManualBusy,1);
+                if(action==0)ListFiles();else if(action==2)Download();else if(action==3)UploadTest();
+                InterlockedExchange(&agentManualBusy,0);
+                lastRequest=GetTickCount();
+                PostMessageW(window,WM_BT_RESULT,0,0);
+            }
+        }
         if(!GetBody("agent-job.txt",NULL,INVALID_HANDLE_VALUE,&n)){ClosePeer();goto pause;}
         if(n>AGENT_MAX_TEXT)goto pause;memcpy(body,xml,n);body[n]=0;
         if(!AgentVerify(body,n,agentKey)||!AgentGet(body,"v",version,sizeof(version))||strcmp(version,"1")||!AgentGet(body,"device",device,sizeof(device))||strcmp(device,MERO_AGENT_DEVICE)||!AgentGet(body,"seq",number,sizeof(number))||!AgentNumber(number,&seq)||!seq||seq<agentLast||!AgentGet(body,"op",op,sizeof(op)))goto pause;
@@ -238,9 +280,10 @@ static void AgentLoop(void){
         WCHAR msg[180];wsprintfW(msg,L"Agent job %u complete; waiting for PC",seq);Note(msg);PostMessageW(window,WM_BT_RESULT,0,0);
 pause:
         AgentLive();
-        {int i;for(i=0;i<20&&agentOn;i++)Sleep(100);}
+        {int i;for(i=0;i<5&&agentOn;i++)Sleep(100);}
     }
 finish:
     MeroArtClose();
+    MeroAmbientClose();
     if(mutex){ReleaseMutex(mutex);CloseHandle(mutex);}ClosePeer();InterlockedExchange(&agentOn,0);
 }

@@ -17,6 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from companion_live import BluetoothLive, music_state, music_line
 from companion_art import Artwork
+from companion_ambient import Ambient
 
 DEFAULT_MOUNT = Path("/run/media/zacmero/6232-3562")
 DEV_UUID = "6232-3562"
@@ -123,10 +124,25 @@ def protocol_value(value):
     return str(value).replace("|", "/").replace("\r", " ").replace("\n", " ")
 
 
+_side_checked = 0.0
+_side_off = False
+
 def cinema_active():
+    global _side_checked, _side_off
     state_home = Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state")))
     # ArchMerOS writes state before blanking displays and removes it after restore.
-    return (state_home / "archmeros" / "cinema-mode.json").is_file()
+    if (state_home / "archmeros" / "cinema-mode.json").is_file():
+        return True
+    # Super+Alt+S uses side-dpms, not the separate cinema-state script.
+    now=time.monotonic()
+    if now-_side_checked >= 1:
+        _side_checked=now
+        try:
+            monitors=json.loads(subprocess.run(["hyprctl","monitors","-j"],capture_output=True,text=True,timeout=0.3,check=True).stdout)
+            _side_off=any(m.get("name")=="DP-2" and m.get("dpmsStatus") is False for m in monitors)
+        except (OSError,ValueError,subprocess.SubprocessError):
+            _side_off=False
+    return _side_off
 
 
 def send_stream(line):
@@ -523,6 +539,8 @@ def main():
     next_fetch = 0.0
     bluetooth = BluetoothLive()
     artwork = Artwork(bluetooth.share)
+    ambient = Ambient(bluetooth.share, compressed=True)
+    bluetooth.ambient = ambient
     next_live = 0.0
     media = None
     try:
@@ -551,11 +569,12 @@ def main():
                 music = music_line(media)
                 send_stream(music)
                 try:
-                    bluetooth.publish([power, music] + ([weather] if weather else []), art=art,
-                                      art_track=media["track"] if media and art else "")
+                    ambient_line = ambient.update()
+                    bluetooth.publish([power, music, ambient_line] + ([weather] if weather else []), art=art,
+                                      art_track=media["track"] if media and art else "", ambient=ambient.sha)
                 except (OSError, ValueError) as error:
                     print(f"[!] Bluetooth live feed: {error}")
-                next_live = time.monotonic() + 2
+                next_live = time.monotonic() + 1
             time.sleep(0.5)
     except KeyboardInterrupt:
         print("[+] Bridge stopped.")
@@ -566,6 +585,7 @@ def main():
             stream_listener.close()
         executor.shutdown(wait=True)
         artwork.close()
+        ambient.close()
 
 
 if __name__ == "__main__":

@@ -46,12 +46,20 @@ def check():
         with tempfile.TemporaryDirectory() as temporary:
             folder = Path(temporary)
             state = folder / "archmeros/cinema-mode.json"
-            with patch.dict(os.environ, {"XDG_STATE_HOME": str(folder)}):
+            with patch.dict(os.environ, {"XDG_STATE_HOME": str(folder)}), patch.object(bridge.subprocess,"run") as monitors:
+                monitors.return_value.stdout='[ {"name":"DP-2","dpmsStatus":true} ]'
+                bridge._side_checked=0
                 assert not bridge.cinema_active()
                 state.parent.mkdir()
                 state.write_text('{"keep":"DP-1"}')
                 assert bridge.cinema_active()
                 state.unlink()
+                assert not bridge.cinema_active()
+                monitors.return_value.stdout='[{"name":"DP-2","dpmsStatus":false}]'
+                bridge._side_checked=0
+                assert bridge.cinema_active()
+                monitors.return_value.stdout='[{"name":"DP-2","dpmsStatus":true}]'
+                bridge._side_checked=0
                 assert not bridge.cinema_active()
             # A genuine ipaq driver alone is insufficient: reject other USB IDs.
             tty = folder / "sys/ttyUSB4"

@@ -4,12 +4,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
-typedef wchar_t WCHAR;typedef unsigned int DWORD;typedef int BOOL,HANDLE,HKEY,AutoLaunchPref;
+typedef wchar_t WCHAR;typedef unsigned int DWORD;typedef int BOOL,HANDLE,HKEY;
+#include "shell_apps.inc"
 typedef unsigned char *LPBYTE;
 #define TRUE 1
 #define FALSE 0
-#define AUTOLAUNCH_NONE 0
-#define AUTOLAUNCH_COUNT 15
 #define CFG_DIR L"\\SDMMC\\MERO"
 #define CFG_FILE L"\\SDMMC\\MERO\\shell.cfg"
 #define INVALID_HANDLE_VALUE (-1)
@@ -26,7 +25,7 @@ typedef unsigned char *LPBYTE;
 static int g_pref,g_countdownSeconds,g_countdownActive,g_returningHome;
 static int g_sdPrefsLoaded;
 static WCHAR g_statusMsg[160];
-static struct {const WCHAR *name;} g_apps[15];
+static struct {const WCHAR *name;} g_apps[AUTOLAUNCH_COUNT];
 static char config[256],stage[256],backup[256];
 static int configExists,legacy=1,registryReads,failWrite,failInstall,failArchive;
 static HANDLE CreateFileW(const WCHAR *path,int access,int share,void *security,int mode,int attr,void *template) {
@@ -67,5 +66,8 @@ int main(void){
     failWrite=0;failArchive=1;assert(!SaveConfig()&&configExists);
     failArchive=0;failInstall=1;assert(!SaveConfig()&&configExists&&!strcmp(config,"autolaunch=0\r\n"));
     failInstall=0;assert(SaveConfig()&&strstr(config,"autolaunch=7")&&strstr(backup,"autolaunch=0"));
+    assert(AUTOLAUNCH_MUSIC==8&&AUTOLAUNCH_GALLERY==1&&AUTOLAUNCH_AMBIENT==15);
+    g_pref=AUTOLAUNCH_AMBIENT;assert(SaveConfig());g_pref=0;LoadConfig();assert(g_pref==AUTOLAUNCH_AMBIENT&&g_countdownActive);
+    snprintf(config,sizeof(config),"autolaunch=%d\r\n",AUTOLAUNCH_COUNT);LoadConfig();assert(g_pref==AUTOLAUNCH_NONE);
     puts("PASS: actual shell default parsing, saved zero, home/autostart, backup and failed-save recovery");return 0;
 }

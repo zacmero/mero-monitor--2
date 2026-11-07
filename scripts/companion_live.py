@@ -158,6 +158,8 @@ class BluetoothLive:
             atomic(self.state / "live-receipts.json", json.dumps(self.receipts).encode())
             if not -3 <= time.time() - int(event["created"]) <= 30:
                 self.result = "expired_press_again"
+            elif event["action"].startswith("ambient-"):
+                self.result = self.ambient.action(event) if getattr(self, "ambient", None) else "control_unavailable"
             else:
                 state = music_state()
                 action = event["action"]
@@ -186,7 +188,7 @@ class BluetoothLive:
                 self.receipts[self.ack] = self.result
                 atomic(self.state / "live-receipts.json", json.dumps(self.receipts).encode())
 
-    def publish(self, lines, art="", art_track=""):
+    def publish(self, lines, art="", art_track="", ambient=""):
         if not self.key and not self.load_key():
             return
         self.event()
@@ -195,6 +197,6 @@ class BluetoothLive:
         if len(payload) >= 4096:
             raise ValueError("telemetry too large")
         fields = dict(v=1, device=DEVICE, serial=self.serial, epoch=int(time.time()),
-                      ack=self.ack, result=self.result, art=art, art_track=art_track,
+                      ack=self.ack, result=self.result, art=art, art_track=art_track, ambient=ambient,
                       data=base64.b64encode(payload).decode())
         atomic(self.share / "live-state.txt", signed(fields, self.key))

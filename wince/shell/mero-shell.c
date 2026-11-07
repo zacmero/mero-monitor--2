@@ -16,7 +16,7 @@
 #include "../mero-agent-start.h"
 #include "../mero-usb.h"
 
-#define SHELL_VERSION       L"0.3.1"
+#define SHELL_VERSION       L"0.3.6"
 #define TIMER_ID_TICK       1
 
 #define IOCTL_HAL_REBOOT    0x0001003C
@@ -77,13 +77,15 @@ typedef enum {
     AUTOLAUNCH_VIS      = 12,
     AUTOLAUNCH_TERMINAL = 13,
     AUTOLAUNCH_NAV      = 14,
-    AUTOLAUNCH_COUNT    = 15
+    AUTOLAUNCH_AMBIENT  = 15,
+    AUTOLAUNCH_BACKLIGHT = 16,
+    AUTOLAUNCH_COUNT    = 17
 } AutoLaunchPref;
 
 typedef struct { const WCHAR *name, *path, *args, *description; } CompanionApp;
 static const CompanionApp g_apps[AUTOLAUNCH_COUNT] = {
     {L"Mero Shell",NULL,NULL,L"No automatic app"},
-    {L"Adaptive Gallery",PATH_GALLERY,NULL,L"Folder profiles, fit and motion"},
+    {L"Local Gallery",PATH_GALLERY,NULL,L"Existing on-device photo folders"},
     {L"Sensor Terminal",PATH_MEDIA_CTRL,NULL,L"Clock, GPS, FM and weather"},
     {L"Display Tuner",PATH_TUNER,NULL,L"Screen, color and backlight"},
     {L"Camera Monitor",PATH_CAM,NULL,L"Existing camera bridge"},
@@ -96,9 +98,11 @@ static const CompanionApp g_apps[AUTOLAUNCH_COUNT] = {
     {L"Bluetooth Files",PATH_BT,NULL,L"Files and agent connection"},
     {L"Audio Visualizer",PATH_VIS,NULL,L"Optional existing application"},
     {L"Terminal",PATH_TERMINAL,NULL,L"Optional existing application"},
-    {L"iGO Navigation",PATH_IGO8,NULL,L"Existing navigation application"}
+    {L"iGO Navigation",PATH_IGO8,NULL,L"Existing navigation application"},
+    {L"Ambient Home",L"\\SDMMC\\MERO\\mero-ambient.exe",NULL,L"Stream PC folders with live weather"},
+    {L"Backlight",L"\\SDMMC\\MERO\\mero-backlight.exe",NULL,L"Compare minimum and maximum brightness"}
 };
-static const int g_appOrder[] = {7,8,1,9,2,10,11,3,4,5,6,12,13,14};
+static const int g_appOrder[] = {15,16,7,8,1,9,2,10,11,3,4,5,6,12,13,14};
 static int g_appPage;
 static BOOL g_selectDefault, g_returningHome;
 static DWORD g_bootStarted,g_agentAttempt,g_usbAttempt;
@@ -919,6 +923,12 @@ static void BluetoothRefresh(void);
 static void BluetoothSet(DWORD mode);
 static void BluetoothPairing(void);
 
+static COLORREF MenuColor(int n){static const COLORREF colors[]={RGB(255,197,93),RGB(255,132,119),RGB(110,225,179),RGB(193,154,255),RGB(117,209,255),RGB(249,150,207)};return colors[n%6];}
+static int g_portrait;
+static void ShellLiveLine(char *line){
+ if(!strncmp(line,"MERO:AMB:",9)){char *p=strstr(line,"portrait=");int next=p?atoi(p+9):0;
+ if(next!=g_portrait){g_portrait=next;g_screenW=next?272:480;g_screenH=next?480:272;InvalidateRect(g_hWnd,NULL,FALSE);}}
+}
 static void UpdateButtons(void)
 {
     int colW = 215;
@@ -938,6 +948,7 @@ static void UpdateButtons(void)
     SetRect(&g_buttons[4].rc, xRight, y0 + (rowH + spacing), xRight + colW, y0 + (rowH + spacing) + rowH);
     SetRect(&g_buttons[5].rc, xRight, y0 + (rowH + spacing)*2, xRight + colW, y0 + (rowH + spacing)*2 + rowH);
 
+    if(g_portrait){int i;for(i=0;i<6;i++)SetRect(&g_buttons[i].rc,18,48+i*58,254,100+i*58);}
     switch (g_currentPage) {
     case PAGE_MAIN:
         lstrcpyW(g_buttons[0].title,L"01 - COMPANION LABS >>");
@@ -950,9 +961,9 @@ static void UpdateButtons(void)
         lstrcpyW(g_buttons[3].sub,L"Hardware and recovery settings");
         lstrcpyW(g_buttons[4].title,L"05 - WINCE DESKTOP");
         lstrcpyW(g_buttons[4].sub,L"Leave the launcher");
-        lstrcpyW(g_buttons[5].title,L"06 - CONNECTION HELP");
-        lstrcpyW(g_buttons[5].sub,L"Bluetooth / ActiveSync state");
-        {int b;for(b=0;b<6;b++)g_buttons[b].color=b==4?RGB(255,120,100):RGB(90,230,200);}
+        lstrcpyW(g_buttons[5].title,L"06 - ORIENTATION");
+        lstrcpyW(g_buttons[5].sub,L"Portrait / landscape display");
+        {int b;for(b=0;b<6;b++)g_buttons[b].color=MenuColor(b);}
         break;
     case PAGE_COMPANIONS:
         {int slot;for(slot=0;slot<4;slot++){
@@ -962,7 +973,7 @@ static void UpdateButtons(void)
                 wsprintfW(g_buttons[b].title,L"%s%s",g_pref==id?L"* ":L"",g_apps[id].name);
                 lstrcpyW(g_buttons[b].sub,g_selectDefault?L"Tap to use at startup":g_apps[id].description);
             }
-            g_buttons[b].color=RGB(70,230,200);
+            g_buttons[b].color=MenuColor(id);
         }}
         wsprintfW(g_buttons[2].title,L"MORE APPS >> [%d/%d]",g_appPage+1,CompanionPages());
         lstrcpyW(g_buttons[2].sub,L"Next page");g_buttons[2].color=RGB(140,190,255);
@@ -1009,7 +1020,7 @@ static void UpdateButtons(void)
         lstrcpyW(g_buttons[4].sub, L"Capture actual app / DLLs to SD");
         lstrcpyW(g_buttons[5].title, L"[6] << BACK TO TOOLS");
         lstrcpyW(g_buttons[5].sub, L"System and advanced controls");
-        { int b; for (b = 0; b < 6; b++) g_buttons[b].color = RGB(100, 190, 255); }
+        { int b; for (b = 0; b < 6; b++) g_buttons[b].color = MenuColor(b); }
         break;
 
     case PAGE_ADVANCED:
@@ -1375,9 +1386,11 @@ static void OnPaint(HWND hWnd)
 
     hdc = BeginPaint(hWnd, &ps);
     GetClientRect(hWnd, &rc);
+    if(g_portrait){rc.right=272;rc.bottom=480;}
 
     memDC = CreateCompatibleDC(hdc);
-    memBmp = CreateCompatibleBitmap(hdc, rc.right, rc.bottom);
+    BITMAPINFO bi;DWORD *pixels;memset(&bi,0,sizeof(bi));bi.bmiHeader.biSize=sizeof(BITMAPINFOHEADER);bi.bmiHeader.biWidth=rc.right;bi.bmiHeader.biHeight=-rc.bottom;bi.bmiHeader.biPlanes=1;bi.bmiHeader.biBitCount=32;
+    memBmp = CreateDIBSection(hdc,&bi,DIB_RGB_COLORS,(void**)&pixels,NULL,0);
     oldBmp = (HBITMAP)SelectObject(memDC, memBmp);
 
     /* Solid Black Background */
@@ -1402,12 +1415,12 @@ static void OnPaint(HWND hWnd)
         SetTextColor(memDC, RGB(255, 200, 40));
         wsprintfW(buf, L"%s", g_isAC ? L"[AC ON]" : L"[BAT]");
     }
-    ExtTextOutW(memDC, 230, 8, 0, NULL, buf, lstrlenW(buf), NULL);
+    ExtTextOutW(memDC, g_portrait?18:230, g_portrait?28:8, 0, NULL, buf, lstrlenW(buf), NULL);
 
     /* RAM Status */
     SetTextColor(memDC, RGB(0, 200, 255));
     wsprintfW(buf, L"RAM: %luM/%luM", g_memAvailMB, g_memTotalMB);
-    ExtTextOutW(memDC, 340, 8, 0, NULL, buf, lstrlenW(buf), NULL);
+    ExtTextOutW(memDC, g_portrait?130:340, g_portrait?28:8, 0, NULL, buf, lstrlenW(buf), NULL);
 
     /* Header Divider Line */
     {
@@ -1424,7 +1437,10 @@ static void OnPaint(HWND hWnd)
     /* DRAW APPLICATION BUTTONS */
     for (i = 0; i < 6; i++) {
         RECT btnRc = g_buttons[i].rc;
-        HPEN hPen = CreatePen(PS_SOLID, 1, g_buttons[i].color);
+        COLORREF color=g_buttons[i].color;int selected=g_buttons[i].title[0]==L'*';
+        HBRUSH tint=CreateSolidBrush(RGB(GetRValue(color)/(selected?4:10),GetGValue(color)/(selected?4:10),GetBValue(color)/(selected?4:10)));
+        FillRect(memDC,&btnRc,tint);DeleteObject(tint);
+        HPEN hPen = CreatePen(PS_SOLID, selected?3:1, color);
         HPEN hOld = (HPEN)SelectObject(memDC, hPen);
 
         /* Draw bounding box */
@@ -1452,8 +1468,8 @@ static void OnPaint(HWND hWnd)
     {
         HPEN hPen = CreatePen(PS_SOLID, 1, RGB(30, 60, 40));
         HPEN hOld = (HPEN)SelectObject(memDC, hPen);
-        MoveToEx(memDC, 18, 202, NULL);
-        LineTo(memDC, g_screenW - 18, 202);
+        MoveToEx(memDC, 18, g_portrait?408:202, NULL);
+        LineTo(memDC, g_screenW - 18, g_portrait?408:202);
         SelectObject(memDC, hOld);
         DeleteObject(hPen);
     }
@@ -1463,7 +1479,7 @@ static void OnPaint(HWND hWnd)
     } else {
         SetTextColor(memDC, RGB(140, 180, 160));
     }
-    ExtTextOutW(memDC, 18, 212, 0, NULL, g_statusMsg, lstrlenW(g_statusMsg), NULL);
+    ExtTextOutW(memDC, 18, g_portrait?420:212, 0, NULL, g_statusMsg, lstrlenW(g_statusMsg), NULL);
 
     /* Footer Hint */
     SetTextColor(memDC, RGB(90, 120, 100));
@@ -1473,10 +1489,14 @@ static void OnPaint(HWND hWnd)
     else if (g_currentPage == PAGE_BLUETOOTH) pageShort = L"Bluetooth";
     else if (g_currentPage == PAGE_ADVANCED) pageShort = L"Advanced";
     wsprintfW(buf, L"Foston FS-460BT // WinCE 5.0 Core // SDMMC: Active // %s (%d/4)", pageShort, (int)g_currentPage + 1);
-    ExtTextOutW(memDC, 18, 234, 0, NULL, buf, lstrlenW(buf), NULL);
+    ExtTextOutW(memDC, 18, g_portrait?450:234, 0, NULL, buf, lstrlenW(buf), NULL);
 
     /* Atomic BitBlt to display - zero tearing, zero blinking */
-    BitBlt(hdc, 0, 0, rc.right, rc.bottom, memDC, 0, 0, SRCCOPY);
+    if(g_portrait&&pixels){DWORD *bits;HDC rot=CreateCompatibleDC(hdc);bi.bmiHeader.biWidth=480;bi.bmiHeader.biHeight=-272;
+        HBITMAP rb=CreateDIBSection(hdc,&bi,DIB_RGB_COLORS,(void**)&bits,NULL,0),old=(HBITMAP)SelectObject(rot,rb);
+        if(bits){int x,y;for(y=0;y<480;y++)for(x=0;x<272;x++)bits[x*480+479-y]=pixels[y*272+x];BitBlt(hdc,0,0,480,272,rot,0,0,SRCCOPY);}
+        SelectObject(rot,old);DeleteObject(rb);DeleteDC(rot);
+    }else BitBlt(hdc,0,0,480,272,memDC,0,0,SRCCOPY);
 
     SelectObject(memDC, oldBmp);
     DeleteObject(memBmp);
@@ -1508,7 +1528,13 @@ static void OnTouch(int x, int y)
                 else if(i==2)g_currentPage=PAGE_BLUETOOTH;
                 else if(i==3)g_currentPage=PAGE_SYSTEM;
                 else if(i==4){ShowDesktop();DestroyWindow(g_hWnd);}
-                else lstrcpyW(g_statusMsg,L"Keep AGENT ON + ActiveSync. Mass Storage locks SD writes.");
+                else {
+                    char token[17]="";int sent=0;
+                    if(MeroBusLock()){char *line=strstr(mero_bus->lines,"MERO:AMB:");char *key=line?strstr(line,"token="):NULL;
+                        if(key)sscanf(key+6,"%16[0-9a-f]",token);ReleaseMutex(mero_bus_mutex);}
+                    if(token[0])sent=MeroBusCommand("ambient-rotate",token,0);
+                    lstrcpyW(g_statusMsg,sent?L"Ambient orientation toggle sent":L"Wait for Bluetooth / previous request");
+                }
                 InvalidateRect(g_hWnd,NULL,FALSE);break;
             case PAGE_COMPANIONS:
                 if(i==5){g_currentPage=PAGE_MAIN;g_selectDefault=FALSE;}
@@ -1657,7 +1683,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
 
     switch (uMsg) {
     case WM_CREATE:
-        MeroLiveInit(hWnd, NULL);
+        MeroLiveInit(hWnd, ShellLiveLine);
         g_hWnd = hWnd;
         HideVendorUI();
         UpdateSystemStatus();
@@ -1723,7 +1749,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         return 0;
 
     case WM_LBUTTONDOWN:
-        OnTouch(LOWORD(lParam), HIWORD(lParam));
+        if(g_portrait)OnTouch(HIWORD(lParam),479-LOWORD(lParam));else OnTouch(LOWORD(lParam), HIWORD(lParam));
         return 0;
 
     case WM_PAINT:

@@ -1,5 +1,17 @@
 # Companion Labs: useful things to build
 
+## Current priority — 2026-11-06
+
+Ambient Home is the next priority. Additional PC command controllers and agent-monitoring dashboards are reference ideas only: the user already has better tools for both. Preserve those ideas below, but do not prioritize their implementation.
+
+- Stream images from user-selected PC folders over Bluetooth. The PC enumerates and resizes images; the Foston retains bounded current-frame data in RAM, without copying the photo library to SD or resident flash. Preserve existing photos and folder settings.
+- Adapt layout, fit/crop, slideshow timing and subtle motion to the selected folder and image orientation. Include folder selection, a clear connection/freshness indicator, and an easy exit to Mero Shell.
+- Combine the streamed gallery with fresh weather and the existing frequency-matrix ambient visuals. Keep optional music information lightweight.
+- Weather must distinguish data-fetch age from link age, retry failed fetches, and label stale data honestly.
+
+Status: Ambient Home is now implemented and deployed as the PC-folder streaming app, alongside the preserved Local Gallery. It combines orientation-aware RAM-only photos, folder selection, slideshow controls and live weather. Native hardware checks verified selection, pause, next while paused, resume and shell exit. Weather refreshes every ten minutes and shows fetch age. See [Ambient Home](AMBIENT_HOME.md) for configuration. Frequency Matrix remains a separate existing app; incorporating it into Home and adding optional music information remain future work.
+
+
 The working link is two-way Bluetooth FTP initiated by the Foston. The PC
 does network access and heavier work; the WinCE device draws locally, accepts
 touches and keeps usable cached/offline views. USB is optional. No working
@@ -57,3 +69,5 @@ battery means every portable idea needs external power.
   Actual hardware suspend/backlight control needs separate device evidence.
 - Do not claim automatic power-on from a software setting. The hardware must
   already boot when USB power returns; cold-power behavior requires a physical test.
+
+Local utility delivered: Backlight (Companion Labs first page), enabling direct minimum/maximum comparisons and restore without vendor UI. Physical brightness efficacy is still to be confirmed by the user.

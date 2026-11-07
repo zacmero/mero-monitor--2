@@ -11,6 +11,7 @@
 #include "mero-agent-key.h"
 static volatile LONG agentOn;
 static volatile LONG agentReconnect;
+static volatile LONG agentManualAction = -1, agentManualBusy;
 #define BT_WINDOW_CLASS L"MERO_FOSTON_AGENT"
 #else
 #define BT_WINDOW_CLASS L"MERO_BT_FILES"
@@ -200,13 +201,18 @@ static LRESULT CALLBACK WndProc(HWND h,UINT msg,WPARAM w,LPARAM l) {
 #ifdef MERO_AGENT_BUILD
     if(msg==RegisterWindowMessageW(L"MERO_AGENT_CONNECT_V1")) {
         InterlockedExchange(&agentReconnect,1);
+        InterlockedCompareExchange(&agentManualAction,0,-1);
         if(!agentOn&&!busy){InterlockedExchange(&agentOn,1);Run(4);}
         if(w){ShowWindow(h,SW_SHOW);SetForegroundWindow(h);}
         Note(L"Agent reconnect requested");InvalidateRect(h,NULL,TRUE);return 0;
     }
 #endif
     if(msg==WM_CREATE){SetTimer(h,1,250,NULL);MeroLiveInit(h,NULL);return 0;}
-    if(msg==WM_TIMER){if(w==MERO_LIVE_TIMER){MeroLiveTick(h);return 0;}
+    if(msg==WM_TIMER){if(w==MERO_LIVE_TIMER){MeroLiveTick(h);
+#ifdef MERO_AGENT_BUILD
+        InvalidateRect(h,NULL,FALSE);
+#endif
+        return 0;}
 #ifdef MERO_AGENT_BUILD
         if(agentReconnect&&!agentOn&&!busy){InterlockedExchange(&agentOn,1);Run(4);}
 #endif
@@ -223,12 +229,26 @@ static LRESULT CALLBACK WndProc(HWND h,UINT msg,WPARAM w,LPARAM l) {
         if(x>=325&&y<33){if(agentOn){InterlockedExchange(&agentReconnect,0);InterlockedExchange(&agentOn,0);Note(L"Agent will pause after the current operation");}else if(!busy){InterlockedExchange(&agentOn,1);Run(4);}InvalidateRect(h,NULL,TRUE);return 0;}
         if(x>=330&&y>=193&&y<226){MeroReturnToShell();ShowWindow(h,SW_HIDE);return 0;}
 #endif
-        if(busy)return 0;
+        if(busy
+#ifdef MERO_AGENT_BUILD
+            && !agentOn
+#endif
+        )return 0;
         if(x<320&&y>=44&&y<194){int row=(y-44)/25;int start=selected/6*6;if(start+row<count)selected=start+row;InvalidateRect(h,NULL,TRUE);}
-        else if(x>=330&&y>=38&&y<226){int b=(y-38)/31;if(b==0){lastRequest=GetTickCount();Run(0);}else if(b==1)Run(2);else if(b==2)Run(3);
+        else if(x>=330&&y>=38&&y<226){int b=(y-38)/31;
+#ifdef MERO_AGENT_BUILD
+            if(agentOn&&b<3) {
+                if(!agentManualBusy&&InterlockedCompareExchange(&agentManualAction,b==0?0:b==1?2:3,-1)==-1)
+                    Note(L"File action queued");
+                return 0;
+            }
+#endif
+            if(b==0){lastRequest=GetTickCount();Run(0);}else if(b==1)Run(2);else if(b==2)Run(3);
             else if(b==3){if(selected>0)selected--;InvalidateRect(h,NULL,TRUE);}else if(b==4){if(selected+1<count)selected++;InvalidateRect(h,NULL,TRUE);}else {MeroReturnToShell();DestroyWindow(h);}}
         return 0;}
-    if(msg==WM_PAINT){PAINTSTRUCT ps;HDC dc=BeginPaint(h,&ps);RECT r={0,0,480,272};HBRUSH black=CreateSolidBrush(RGB(8,14,20));FillRect(dc,&r,black);DeleteObject(black);
+    if(msg==WM_PAINT){PAINTSTRUCT ps;HDC screen=BeginPaint(h,&ps),dc=CreateCompatibleDC(screen);
+        HBITMAP bitmap=CreateCompatibleBitmap(screen,480,272),previous=(HBITMAP)SelectObject(dc,bitmap);
+        RECT r={0,0,480,272};HBRUSH black=CreateSolidBrush(RGB(8,14,20));FillRect(dc,&r,black);DeleteObject(black);
         SetBkMode(dc,TRANSPARENT);SetTextColor(dc,RGB(80,220,180));DrawTextW(dc,L"MERO BLUETOOTH FILES",-1,&(RECT){12,5,470,32},DT_LEFT);
 #ifdef MERO_AGENT_BUILD
         SetTextColor(dc,RGB(255,210,100));DrawTextW(dc,agentOn?L"[AGENT ON]":L"[AGENT OFF]",-1,&(RECT){325,5,477,32},DT_LEFT);
@@ -236,8 +256,20 @@ static LRESULT CALLBACK WndProc(HWND h,UINT msg,WPARAM w,LPARAM l) {
         int i,start=selected/6*6;for(i=0;i<6&&start+i<count;i++){WCHAR line[100];MultiByteToWideChar(CP_ACP,0,names[start+i],-1,line,100);
             SetTextColor(dc,start+i==selected?RGB(255,230,120):RGB(200,210,220));DrawTextW(dc,line,-1,&(RECT){14,44+i*25,320,69+i*25},DT_LEFT|DT_SINGLELINE|DT_END_ELLIPSIS);}
         const WCHAR *buttons[]={L"CONNECT / LIST",L"DOWNLOAD FILE",L"UPLOAD TEST",L"PREVIOUS",L"NEXT",L"BACK"};SetTextColor(dc,RGB(100,190,255));
-        for(i=0;i<6;i++)DrawTextW(dc,buttons[i],-1,&(RECT){330,38+i*31,477,69+i*31},DT_LEFT|DT_SINGLELINE);
-        SetTextColor(dc,RGB(210,210,210));DrawTextW(dc,status,-1,&(RECT){10,232,477,270},DT_LEFT|DT_WORDBREAK);EndPaint(h,&ps);return 0;}
+        SelectClipRgn(dc,NULL);
+        for(i=0;i<6;i++)ExtTextOutW(dc,330,38+i*31,0,NULL,buttons[i],lstrlenW(buttons[i]),NULL);
+        SetTextColor(dc,RGB(210,210,210));
+#ifdef MERO_AGENT_BUILD
+        if(agentOn&&!agentManualBusy&&agentManualAction<0&&(!lastRequest||(DWORD)(GetTickCount()-lastRequest)>5000)) {
+            WCHAR live[128];DWORD age=mero_received?(DWORD)(GetTickCount()-mero_received)/1000:99999;
+            if(mero_received&&age<15)wsprintfW(live,L"CONNECTED // PC data %lus ago. File controls ready.",age);
+            else lstrcpyW(live,L"CONNECTING // waiting for fresh PC data");
+            SelectClipRgn(dc,NULL);ExtTextOutW(dc,10,240,0,NULL,live,lstrlenW(live),NULL);
+        } else
+#endif
+        {SelectClipRgn(dc,NULL);ExtTextOutW(dc,10,240,0,NULL,status,lstrlenW(status),NULL);}
+        BitBlt(screen,0,0,480,272,dc,0,0,SRCCOPY);SelectObject(dc,previous);DeleteObject(bitmap);DeleteDC(dc);
+        EndPaint(h,&ps);return 0;}
     if(msg==WM_DESTROY){MeroLiveClose(h);ClosePeer();PostQuitMessage(0);return 0;}
     return DefWindowProcW(h,msg,w,l);
 }

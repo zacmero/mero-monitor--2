@@ -10,6 +10,8 @@ source=(root/"wince/shell/mero-shell.c").read_text()
 prefs=source[source.index("static void LoadConfig(void)"):source.index("/* Query system metrics */")]
 with tempfile.TemporaryDirectory() as directory:
     folder=Path(directory);(folder/"shell_prefs.inc").write_text(prefs)
+    start=source.rfind("typedef enum",0,source.index("    AUTOLAUNCH_NONE"))
+    (folder/"shell_apps.inc").write_text(source[start:source.index("} AutoLaunchPref;",start)+len("} AutoLaunchPref;")])
     subprocess.run(["cc","-std=c99","-I",str(folder),str(root/"scripts/check_launcher.c"),"-o",str(folder/"check")],check=True)
     subprocess.run([str(folder/"check")],check=True)
 data=b"MERO32R1"+struct.pack("<HH",480,272)+struct.pack("<HH",480,0xf800)*272

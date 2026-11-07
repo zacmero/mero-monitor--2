@@ -3,6 +3,9 @@
 #define MERO_LIVE_H
 #include <winsock2.h>
 #include "mero-bus.h"
+#ifdef MERO_AGENT_BUILD
+#include "mero-cinema-backlight.h"
+#endif
 #define MERO_LIVE_TIMER 99
 static SOCKET mero_socket = INVALID_SOCKET;
 static BOOL mero_connecting = FALSE, mero_standby = FALSE;
@@ -36,6 +39,9 @@ static LRESULT CALLBACK MeroBlankProc(HWND h, UINT message, WPARAM w, LPARAM l)
 }
 static void MeroLiveStandby(HWND owner, BOOL standby)
 {
+#ifdef MERO_AGENT_BUILD
+    MeroCinemaBacklight(standby);
+#endif
     if (mero_standby == standby) return;
     mero_standby = standby;
     if (standby) {
@@ -161,6 +167,9 @@ static void MeroLiveInit(HWND owner, void (*handler)(char *))
 
 static void MeroLiveClose(HWND owner)
 {
+#ifdef MERO_AGENT_BUILD
+    MeroCinemaBacklight(0);
+#endif
     KillTimer(owner, MERO_LIVE_TIMER);
     MeroLiveDisconnect();
     if (mero_blank) DestroyWindow(mero_blank);
