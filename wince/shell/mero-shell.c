@@ -16,7 +16,7 @@
 #include "../mero-agent-start.h"
 #include "../mero-usb.h"
 
-#define SHELL_VERSION       L"0.3.6"
+#define SHELL_VERSION       L"0.3.7"
 #define TIMER_ID_TICK       1
 
 #define IOCTL_HAL_REBOOT    0x0001003C
@@ -79,7 +79,8 @@ typedef enum {
     AUTOLAUNCH_NAV      = 14,
     AUTOLAUNCH_AMBIENT  = 15,
     AUTOLAUNCH_BACKLIGHT = 16,
-    AUTOLAUNCH_COUNT    = 17
+    AUTOLAUNCH_PC_TERMINAL = 17,
+    AUTOLAUNCH_COUNT    = 18
 } AutoLaunchPref;
 
 typedef struct { const WCHAR *name, *path, *args, *description; } CompanionApp;
@@ -100,10 +101,12 @@ static const CompanionApp g_apps[AUTOLAUNCH_COUNT] = {
     {L"Terminal",PATH_TERMINAL,NULL,L"Optional existing application"},
     {L"iGO Navigation",PATH_IGO8,NULL,L"Existing navigation application"},
     {L"Ambient Home",L"\\SDMMC\\MERO\\mero-ambient.exe",NULL,L"Stream PC folders with live weather"},
-    {L"Backlight",L"\\SDMMC\\MERO\\mero-backlight.exe",NULL,L"Compare minimum and maximum brightness"}
+    {L"Backlight",L"\\SDMMC\\MERO\\mero-backlight.exe",NULL,L"Compare minimum and maximum brightness"},
+    {L"Mero Terminal",L"\\SDMMC\\MERO\\mero-pc-terminal.exe",NULL,L"PC shell, touch and physical keyboard"}
 };
-static const int g_appOrder[] = {15,16,7,8,1,9,2,10,11,3,4,5,6,12,13,14};
+static const int g_appOrder[] = {15,17,16,7,8,1,9,2,10,11,3,4,5,6,12,13,14};
 static int g_appPage;
+static int g_keyboardButton,g_keyboardFocus;
 static BOOL g_selectDefault, g_returningHome;
 static DWORD g_bootStarted,g_agentAttempt,g_usbAttempt;
 static BOOL g_usbStartupReady;
@@ -1440,6 +1443,7 @@ static void OnPaint(HWND hWnd)
         COLORREF color=g_buttons[i].color;int selected=g_buttons[i].title[0]==L'*';
         HBRUSH tint=CreateSolidBrush(RGB(GetRValue(color)/(selected?4:10),GetGValue(color)/(selected?4:10),GetBValue(color)/(selected?4:10)));
         FillRect(memDC,&btnRc,tint);DeleteObject(tint);
+        if(g_keyboardFocus&&i==g_keyboardButton){RECT marker={btnRc.left,btnRc.top,btnRc.left+5,btnRc.bottom};HBRUSH focus=CreateSolidBrush(RGB(255,220,120));FillRect(memDC,&marker,focus);DeleteObject(focus);}
         HPEN hPen = CreatePen(PS_SOLID, selected?3:1, color);
         HPEN hOld = (HPEN)SelectObject(memDC, hPen);
 
@@ -1748,7 +1752,16 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         }
         return 0;
 
+    case WM_KEYDOWN:
+        g_keyboardFocus=1;
+        if(wParam==VK_TAB||wParam==VK_DOWN||wParam==VK_RIGHT)g_keyboardButton=(g_keyboardButton+1)%6;
+        else if(wParam==VK_UP||wParam==VK_LEFT)g_keyboardButton=(g_keyboardButton+5)%6;
+        else if(wParam==VK_ESCAPE){g_currentPage=PAGE_MAIN;g_keyboardButton=0;}
+        else if(wParam==VK_RETURN){RECT r=g_buttons[g_keyboardButton].rc;OnTouch((r.left+r.right)/2,(r.top+r.bottom)/2);}
+        UpdateButtons();InvalidateRect(hWnd,NULL,FALSE);return 0;
+
     case WM_LBUTTONDOWN:
+        g_keyboardFocus=0;
         if(g_portrait)OnTouch(HIWORD(lParam),479-LOWORD(lParam));else OnTouch(LOWORD(lParam), HIWORD(lParam));
         return 0;
 

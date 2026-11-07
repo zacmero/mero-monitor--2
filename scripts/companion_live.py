@@ -10,8 +10,10 @@ import json
 import os
 from pathlib import Path
 import re
+import secrets
 import subprocess
 import time
+import zlib
 from urllib.parse import parse_qs, urlsplit
 
 DEVICE = "00:18:E4:1F:03:AF"
@@ -120,6 +122,7 @@ class BluetoothLive:
         self.serial = time.time_ns()
         self.last_event = None
         self.last_publish = 0
+        self.codec_offer=secrets.token_hex(8)
         try:
             self.receipts = json.loads((self.state / "live-receipts.json").read_text())
             self.ack, self.result = next(reversed(self.receipts.items()), ("", ""))
@@ -160,6 +163,8 @@ class BluetoothLive:
                 self.result = "expired_press_again"
             elif event["action"].startswith("ambient-"):
                 self.result = self.ambient.action(event) if getattr(self, "ambient", None) else "control_unavailable"
+            elif event["action"].startswith("terminal-"):
+                self.result = self.terminal.action(event) if getattr(self, "terminal", None) else "control_unavailable"
             else:
                 state = music_state()
                 action = event["action"]
@@ -188,15 +193,33 @@ class BluetoothLive:
                 self.receipts[self.ack] = self.result
                 atomic(self.state / "live-receipts.json", json.dumps(self.receipts).encode())
 
-    def publish(self, lines, art="", art_track="", ambient=""):
+    def publish(self, lines, art="", art_track="", ambient="", keyboard=""):
         if not self.key and not self.load_key():
             return
         self.event()
         self.serial += 1
-        payload = ("\n".join(lines) + "\n").encode("utf-8")
+        # Capture terminal output after executing the just-arrived input, so
+        # the echo need not wait an entire additional publication interval.
+        payload = ("\n".join(line() if callable(line) else line for line in lines) + "\n").encode("utf-8")
         if len(payload) >= 4096:
             raise ValueError("telemetry too large")
+        codec=""
+        try:
+            capability=verified((self.share/"live-codec.txt").read_bytes(),self.key)
+            if capability.get('offer')==self.codec_offer and capability.get('codec')=='zlib1' and -3<=time.time()-int(capability['epoch'])<=8:
+                if getattr(self,'terminal',None) is not None and capability.get('terminal') in ('0','1'):
+                    self.terminal.demand_until=time.monotonic()+6 if capability.get('terminal')=='1' else 0
+                packed=zlib.compress(payload,1)
+                if len(packed)<len(payload):payload=packed;codec='zlib1'
+        except (OSError,ValueError,KeyError):pass
+        job_seq=""
+        try:
+            job=verified((self.share/'agent-job.txt').read_bytes(),self.key)
+            value=job['seq']
+            if re.fullmatch(r'[0-9]{1,10}',value) and int(value)<=4294967295:job_seq=value
+        except (OSError,ValueError,KeyError):pass
         fields = dict(v=1, device=DEVICE, serial=self.serial, epoch=int(time.time()),
-                      ack=self.ack, result=self.result, art=art, art_track=art_track, ambient=ambient,
+                      ack=self.ack, result=self.result, art=art, art_track=art_track, ambient=ambient, keyboard=keyboard,
+                      codec_offer=self.codec_offer,codec=codec,job_seq=job_seq,
                       data=base64.b64encode(payload).decode())
         atomic(self.share / "live-state.txt", signed(fields, self.key))

@@ -1,8 +1,11 @@
 # Root Makefile for mero-monitor-#2
 
-.PHONY: all clean probe shell cmd flash gallery tuner media cam bluetooth music ambient backlight check
+.PHONY: all clean probe shell cmd flash gallery tuner media cam bluetooth music ambient backlight terminal check
 
-all: probe shell cmd flash gallery tuner media cam bluetooth music ambient backlight
+all: probe shell cmd flash gallery tuner media cam bluetooth music ambient backlight terminal
+
+terminal:
+	$(MAKE) -C wince/terminal
 
 backlight:
 	$(MAKE) -C wince/backlight
@@ -40,6 +43,8 @@ music:
 	$(MAKE) -C wince/music
 
 check:
+	python3 scripts/check_live_compression.py
+	python3 scripts/check_terminal.py
 	python3 scripts/check_firmware_probe.py
 	python3 scripts/check_backlight_app.py
 	python3 scripts/check_backlight_script.py
@@ -61,6 +66,7 @@ check:
 	/tmp/mero-check-obex
 
 clean:
+	$(MAKE) -C wince/terminal clean
 	$(MAKE) -C wince/backlight clean
 	$(MAKE) -C wince/probe clean
 	$(MAKE) -C wince/shell clean

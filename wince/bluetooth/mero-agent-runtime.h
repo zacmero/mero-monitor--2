@@ -4,7 +4,10 @@
 #include "../mero-art.h"
 #include <tlhelp32.h>
 #include "../mero-photo-codec.h"
+#include "../mero-live-zlib.h"
 static DWORD photoGetMs,photoDecodeMs,photoBytes;
+static DWORD liveGetMs,liveSendMs,livePeriodMs,liveFrameBytes,liveSamples,liveLastTick,jobGetMs;
+static unsigned int liveJobHint;static DWORD liveJobHintTick;static int liveJobHintValid;
 static unsigned char agentKey[32];
 static WCHAR agentRoot[160];
 static unsigned int agentLast;
@@ -20,6 +23,8 @@ static void AgentStatusExtras(char *result,unsigned int cap) {
     snprintf(result+len,cap-len,"boot_launch50=%s\n",boot);
     len=strlen(result);
     snprintf(result+len,cap-len,"photo_bytes=%lu\nphoto_get_ms=%lu\nphoto_decode_ms=%lu\n",photoBytes,photoGetMs,photoDecodeMs);
+    len=strlen(result);
+    snprintf(result+len,cap-len,"live_get_ms=%lu\nlive_send_ms=%lu\nlive_period_ms=%lu\nlive_frame_bytes=%lu\nlive_samples=%lu\njob_get_ms=%lu\n",liveGetMs,liveSendMs,livePeriodMs,liveFrameBytes,liveSamples,jobGetMs);
     if(MeroBusLock()) {
         len=strlen(result);
         snprintf(result+len,cap-len,"live_generation=%lu\nlive_age_sec=%lu\nlive_weather=%d\nlive_music=%d\nlive_ack=%s\nlive_result=%s\n",
@@ -189,14 +194,44 @@ static void AgentArtwork(const char *sha,const char *track) {
     memcpy(mero_art->pixels,xml,n);strcpy(mero_art->sha,sha);strcpy(mero_art->track,track);
     ReleaseMutex(mero_bus_mutex);
 }
+#include "mero-keyboard.h"
+static int AgentTerminalActive(void);
+static void AgentLiveCodec(const char *offer,unsigned int epoch){
+    static char previous[17]="";static DWORD sentTick;static int previousActive=-1;int active=AgentTerminalActive();unsigned char token[8];char message[256];
+    if(strlen(offer)!=16||!AuthUnhex(offer,token,8))return;
+    if(!strcmp(previous,offer)&&previousActive==active&&(DWORD)(GetTickCount()-sentTick)<3000)return;
+    snprintf(message,sizeof(message),"v=1\ndevice=%s\noffer=%s\ncodec=zlib1\nepoch=%u\nterminal=%d\n",MERO_AGENT_DEVICE,offer,epoch,active);
+    CreateDirectoryW(L"\\Temp",NULL);
+    if(AgentSign(message,sizeof(message),agentKey)&&AgentWrite(L"\\Temp\\MeroLiveCodec.txt",message,strlen(message))&&
+       AgentSend("live-codec.txt",L"\\Temp\\MeroLiveCodec.txt")){strcpy(previous,offer);sentTick=GetTickCount();previousActive=active;}
+}
+static void AgentLiveEvent(void){
+    static char sentId[80]="";static DWORD sentTick;char event[2049],id[80];
+    event[0]=0;if(!MeroBusLock())return;
+    if(mero_bus->event[0]&&strcmp(mero_bus->eventId,mero_bus->ack)){
+        strcpy(id,mero_bus->eventId);
+        if(strcmp(sentId,id)||(DWORD)(GetTickCount()-sentTick)>1000)
+            snprintf(event,sizeof(event),"v=1\ndevice=%s\n%s",MERO_AGENT_DEVICE,mero_bus->event);
+    }ReleaseMutex(mero_bus_mutex);
+    if(event[0]&&AgentSign(event,sizeof(event),agentKey)){
+        DWORD begin=GetTickCount();
+        CreateDirectoryW(L"\\Temp",NULL);
+        if(AgentWrite(L"\\Temp\\MeroLiveEvent.txt",event,strlen(event))&&AgentSend("live-event.txt",L"\\Temp\\MeroLiveEvent.txt")){
+            strcpy(sentId,id);sentTick=GetTickCount();
+        }else ClosePeer();
+        liveSendMs=GetTickCount()-begin;
+    }
+}
 static void AgentLive(void) {
     static char serial[40] = "";
     static int sawFirst;
-    char body[8193], version[8], device[32], next[40], epoch[24], data[5600];
-    char lines[MERO_BUS_BYTES], ack[80], result[96], event[2049],art[65]="",artTrack[32]="",ambient[65]="";
-    unsigned int n, stamp;
+    char body[8193], version[8], device[32], next[40], epoch[24], data[5600],codec[16]="",offer[17]="",hint[16];
+    char lines[MERO_BUS_BYTES], ack[80], result[96],art[65]="",artTrack[32]="",ambient[65]="",keyboard[192]="";
+    unsigned int n, stamp;DWORD began=GetTickCount();
     if (channel == INVALID_SOCKET) return;
+    AgentLiveEvent();if(channel==INVALID_SOCKET)return;began=GetTickCount();
     if (!GetBody("live-state.txt", NULL, INVALID_HANDLE_VALUE, &n)) { ClosePeer(); return; }
+    liveGetMs=GetTickCount()-began;liveFrameBytes=n;
     if (n > 8192) return;
     memcpy(body, xml, n); body[n] = 0;
     if (!AgentVerifyLimit(body, n, agentKey, 8192) ||
@@ -205,37 +240,42 @@ static void AgentLive(void) {
         !AgentGet(body,"serial",next,sizeof(next)) || !next[0] ||
         !AgentGet(body,"epoch",epoch,sizeof(epoch)) || !AgentNumber(epoch,&stamp) ||
         !AgentGet(body,"data",data,sizeof(data)) ||
-        !AgentGet(body,"ack",ack,sizeof(ack)) || !AgentGet(body,"result",result,sizeof(result)) ||
-        MeroBase64(data,lines,sizeof(lines)) < 0) return;
+        !AgentGet(body,"ack",ack,sizeof(ack)) || !AgentGet(body,"result",result,sizeof(result))) return;
+    AgentGet(body,"codec",codec,sizeof(codec));
+    if(MeroLiveDecode(data,codec,lines,sizeof(lines))<0)return;
     {unsigned int i;for(i=0;next[i];i++)if(next[i]<'0'||next[i]>'9')return;}
     if(serial[0] && (strlen(next)<strlen(serial) ||
        (strlen(next)==strlen(serial) && strcmp(next,serial)<0)))return;
     /* A file left on the PC while the bridge is stopped is not a live link.
        Require two increasing snapshots before publishing after agent startup. */
     if(!sawFirst){strcpy(serial,next);sawFirst=1;return;}
+    if(strcmp(serial,next)){
+        liveJobHintValid=AgentGet(body,"job_seq",hint,sizeof(hint))&&AgentNumber(hint,&liveJobHint);
+        liveJobHintTick=GetTickCount();
+    }
+    AgentGet(body,"codec_offer",offer,sizeof(offer));
+    if(strcmp(serial,next))AgentLiveCodec(offer,stamp);
     AgentGet(body,"art",art,sizeof(art));AgentGet(body,"art_track",artTrack,sizeof(artTrack));
     AgentGet(body,"ambient",ambient,sizeof(ambient));
-    event[0] = 0;
+    AgentGet(body,"keyboard",keyboard,sizeof(keyboard));
+    if(strcmp(serial,next)&&keyboard[0])AgentKeyboard(keyboard);
     if (!MeroBusLock()) return;
     if (strcmp(serial,next)) {
+        DWORD now=GetTickCount();if(liveLastTick)livePeriodMs=now-liveLastTick;liveLastTick=now;liveSamples++;
         strcpy(serial,next); strcpy(mero_bus->lines,lines);
         mero_bus->tick=GetTickCount(); mero_bus->epoch=stamp;
         if (!++mero_bus->generation) ++mero_bus->generation;
         strcpy(mero_bus->ack,ack); strcpy(mero_bus->result,result);
     }
-    if (mero_bus->event[0] && strcmp(mero_bus->eventId,mero_bus->ack))
-        snprintf(event,sizeof(event),"v=1\ndevice=%s\n%s",MERO_AGENT_DEVICE,mero_bus->event);
     ReleaseMutex(mero_bus_mutex);
-    if (event[0] && AgentSign(event,sizeof(event),agentKey)) {
-        CreateDirectoryW(L"\\Temp",NULL);
-        if (AgentWrite(L"\\Temp\\MeroLiveEvent.txt",event,strlen(event)) &&
-            !AgentSend("live-event.txt",L"\\Temp\\MeroLiveEvent.txt")) ClosePeer();
-    }
+    AgentLiveEvent();
     if(channel!=INVALID_SOCKET)AgentArtwork(art,artTrack);
     if(channel!=INVALID_SOCKET)AgentAmbient(ambient);
 }
+static int AgentTerminalActive(void){HWND h=FindWindowW(L"MERO_TERMINAL",NULL);return h&&GetForegroundWindow()==h;}
 static void AgentLoop(void){
     HANDLE mutex=NULL;char body[2049],op[32],number[32],device[32],version[8],result[2049];unsigned int n,seq,sent=0;
+    DWORD lastJobPoll=0;
     /* SD and the USB function driver may become ready after the shell. */
     while(agentOn&&!AgentInit(&mutex)) {
         if(!mutex)goto finish; /* Another keyed agent already owns the link. */
@@ -258,7 +298,11 @@ static void AgentLoop(void){
                 PostMessageW(window,WM_BT_RESULT,0,0);
             }
         }
+        if(AgentTerminalActive()&&liveJobHintValid&&(DWORD)(GetTickCount()-liveJobHintTick)<3000&&(!liveJobHint||liveJobHint==sent))goto pause;
+        if(AgentTerminalActive()&&lastJobPoll&&(DWORD)(GetTickCount()-lastJobPoll)<1000)goto pause;
+        lastJobPoll=GetTickCount();
         if(!GetBody("agent-job.txt",NULL,INVALID_HANDLE_VALUE,&n)){ClosePeer();goto pause;}
+        jobGetMs=GetTickCount()-lastJobPoll;
         if(n>AGENT_MAX_TEXT)goto pause;memcpy(body,xml,n);body[n]=0;
         if(!AgentVerify(body,n,agentKey)||!AgentGet(body,"v",version,sizeof(version))||strcmp(version,"1")||!AgentGet(body,"device",device,sizeof(device))||strcmp(device,MERO_AGENT_DEVICE)||!AgentGet(body,"seq",number,sizeof(number))||!AgentNumber(number,&seq)||!seq||seq<agentLast||!AgentGet(body,"op",op,sizeof(op)))goto pause;
         if(seq==sent)goto pause;
@@ -280,7 +324,8 @@ static void AgentLoop(void){
         WCHAR msg[180];wsprintfW(msg,L"Agent job %u complete; waiting for PC",seq);Note(msg);PostMessageW(window,WM_BT_RESULT,0,0);
 pause:
         AgentLive();
-        {int i;for(i=0;i<5&&agentOn;i++)Sleep(100);}
+        if(AgentTerminalActive())Sleep(25);
+        else {int i;for(i=0;i<5&&agentOn;i++)Sleep(100);}
     }
 finish:
     MeroArtClose();

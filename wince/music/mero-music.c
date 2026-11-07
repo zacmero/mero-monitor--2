@@ -143,6 +143,10 @@ static LRESULT CALLBACK WindowProc(HWND h,UINT msg,WPARAM w,LPARAM l) {
     if(msg==WM_TIMER){if(w==MERO_LIVE_TIMER)MeroLiveTick(h);if(!mero_standby)InvalidateRect(h,NULL,FALSE);return 0;}
     if(msg==WM_ERASEBKGND)return 1;
     if(msg==WM_PAINT){Paint(h);return 0;}
+    if(msg==WM_KEYDOWN&&!mero_standby){if(w==VK_ESCAPE){MeroReturnToShell();DestroyWindow(h);}
+        else if(Fresh()&&w==VK_LEFT&&canPrevious)MeroBusCommand("previous",track,0);
+        else if(Fresh()&&w==VK_RIGHT&&canNext)MeroBusCommand("next",track,0);return 0;}
+    if(msg==WM_CHAR&&w==' '&&!mero_standby){if(Fresh()&&canPlay)MeroBusCommand("playpause",track,0);return 0;}
     if(msg==WM_LBUTTONDOWN&&!mero_standby){int x=LOWORD(l),y=HIWORD(l),ok=0;
         if(x>=392&&y<40){MeroReturnToShell();DestroyWindow(h);return 0;}
         if(Fresh()) {

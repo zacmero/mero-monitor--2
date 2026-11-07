@@ -34,7 +34,7 @@ def deploy(mount):
         ["findmnt", "-n", "-o", "UUID", "--target", str(mount)], text=True).strip()
     if detected.upper() != UUID:
         raise SystemExit(f"Refusing unknown filesystem UUID {detected!r}")
-    allowed = {"mero-shell.exe", "mero-gallery.exe", "mero-media-ctrl.exe", "mero-tuner.exe", "mero-cam.exe", "mero-flash.exe", "mero-bt.exe", "mero-music.exe", "mero-backlight.exe", "mero-ambient.exe", "mero-cmd.exe", "mero-probe.exe", "mero-screen.exe"}
+    allowed = {"mero-shell.exe", "mero-gallery.exe", "mero-media-ctrl.exe", "mero-tuner.exe", "mero-cam.exe", "mero-flash.exe", "mero-bt.exe", "mero-music.exe", "mero-backlight.exe", "mero-ambient.exe", "mero-pc-terminal.exe", "mero-cmd.exe", "mero-probe.exe", "mero-screen.exe"}
     # Never collect keyed agent/update binaries from an indiscriminate glob.
     sources = sorted(p for p in (ROOT / "wince").glob("*/*.exe") if p.name in allowed)
     required = {"mero-shell.exe", "mero-gallery.exe", "mero-media-ctrl.exe", "mero-tuner.exe", "mero-cam.exe", "mero-flash.exe", "mero-bt.exe", "mero-music.exe"}

@@ -71,3 +71,7 @@ battery means every portable idea needs external power.
   already boot when USB power returns; cold-power behavior requires a physical test.
 
 Local utility delivered: Backlight (Companion Labs first page), enabling direct minimum/maximum comparisons and restore without vendor UI. Physical brightness efficacy is still to be confirmed by the user.
+
+## Approved next app — Mero Terminal (2026-11-07)
+
+User approved persistent PC terminal text over Bluetooth, compact fastfetch, touch keyboard and explicit PC keyboard forwarding into custom Foston apps. Implementation/usage: [MERO_TERMINAL.md](MERO_TERMINAL.md). Keep firmware work behind this app priority. Existing optional terminal and saved IDs are preserved.

@@ -18,6 +18,7 @@ from pathlib import Path
 from companion_live import BluetoothLive, music_state, music_line
 from companion_art import Artwork
 from companion_ambient import Ambient
+from companion_terminal import Terminal
 
 DEFAULT_MOUNT = Path("/run/media/zacmero/6232-3562")
 DEV_UUID = "6232-3562"
@@ -541,8 +542,16 @@ def main():
     artwork = Artwork(bluetooth.share)
     ambient = Ambient(bluetooth.share, compressed=True)
     bluetooth.ambient = ambient
+    terminal = Terminal(bluetooth.share, lambda: bluetooth.key, managed=True)
+    bluetooth.terminal = terminal
     next_live = 0.0
+    next_media = 0.0
+    media_executor = ThreadPoolExecutor(max_workers=1)
+    media_future = None
+    next_stream = 0.0
     media = None
+    art = ""
+    music = music_line(None)
     try:
         while True:
             now = time.monotonic()
@@ -556,26 +565,35 @@ def main():
             if future is None and now >= next_fetch:
                 future = executor.submit(fetch_weather)
             power = f"MERO:POWER:standby={int(cinema_active())}"
-            send_stream(power)
             weather = ""
             if latest_weather_line:
                 age = int(max(0, time.time() - last_weather_fetch))
                 weather = latest_weather_line + f"|age={age}"
-                send_stream(weather)
+            if now >= next_stream:
+                send_stream(power)
+                if weather:send_stream(weather)
+                next_stream = now+0.5
             if now >= next_live:
-                media = music_state()
-                art = artwork.update(media)
-                if media: media["art"] = art
-                music = music_line(media)
-                send_stream(music)
+                if media_future is not None and media_future.done():
+                    try:media = media_future.result()
+                    except Exception:media = None
+                    media_future = None
+                    art = artwork.update(media)
+                    if media: media["art"] = art
+                    music = music_line(media)
+                    send_stream(music)
+                    next_media = time.monotonic() + 1
+                if media_future is None and now >= next_media:
+                    media_future = media_executor.submit(music_state)
                 try:
                     ambient_line = ambient.update()
-                    bluetooth.publish([power, music, ambient_line] + ([weather] if weather else []), art=art,
-                                      art_track=media["track"] if media and art else "", ambient=ambient.sha)
+                    bluetooth.publish([power, music, ambient_line, terminal.update] + ([weather] if weather else []), art=art,
+                                      art_track=media["track"] if media and art else "", ambient=ambient.sha,
+                                      keyboard=terminal.keyboard_field())
                 except (OSError, ValueError) as error:
                     print(f"[!] Bluetooth live feed: {error}")
-                next_live = time.monotonic() + 1
-            time.sleep(0.5)
+                next_live = time.monotonic() + (0.15 if terminal.demand_until > time.monotonic() else 1)
+            time.sleep(0.025)
     except KeyboardInterrupt:
         print("[+] Bridge stopped.")
     finally:
@@ -584,8 +602,10 @@ def main():
         if stream_listener is not None:
             stream_listener.close()
         executor.shutdown(wait=True)
+        media_executor.shutdown(wait=False)
         artwork.close()
         ambient.close()
+        terminal.close()
 
 
 if __name__ == "__main__":

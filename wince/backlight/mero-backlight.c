@@ -76,6 +76,8 @@ static LRESULT CALLBACK WndProc(HWND h,UINT msg,WPARAM w,LPARAM l){
     if(msg==WM_TIMER){if(w==MERO_LIVE_TIMER)MeroLiveTick(h);else Refresh();if(!mero_standby)InvalidateRect(h,NULL,FALSE);return 0;}
     if(msg==WM_ERASEBKGND)return 1;
     if(msg==WM_PAINT){Paint(h);return 0;}
+    if(msg==WM_CHAR&&!mero_standby){if(w=='-')Act(0);else if(w=='+')Act(1);else if(w=='0')Act(2);else if(w=='9')Act(3);else if(w=='r'||w=='R')Act(4);InvalidateRect(h,NULL,FALSE);return 0;}
+    if(msg==WM_KEYDOWN&&w==VK_ESCAPE&&!mero_standby){MeroReturnToShell();DestroyWindow(h);return 0;}
     if(msg==WM_LBUTTONDOWN&&!mero_standby){POINT p={LOWORD(l),HIWORD(l)};int i;if(portrait){int x=p.x;p.x=p.y;p.y=479-x;}
         for(i=0;i<6;i++){RECT r=Button(i);if(PtInRect(&r,p)){if(i==5){MeroReturnToShell();DestroyWindow(h);}else{Act(i);InvalidateRect(h,NULL,FALSE);}break;}}return 0;
     }

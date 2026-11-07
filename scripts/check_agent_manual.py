@@ -5,7 +5,7 @@ import subprocess,tempfile
 root=Path(__file__).resolve().parents[1]
 source=(root/'wince/bluetooth/mero-agent-runtime.h').read_text()
 a=source.index('{LONG action=InterlockedExchange(&agentManualAction,-1);')
-b=source.index('        if(!GetBody("agent-job.txt"',a)
+b=source.index('        if(AgentTerminalActive()',a)
 block=source[a:b]
 shim='''
 #include <assert.h>

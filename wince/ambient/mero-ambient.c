@@ -221,6 +221,12 @@ static LRESULT CALLBACK WindowProc(HWND h,UINT msg,WPARAM w,LPARAM l) {
     }
     if(msg==WM_ERASEBKGND)return 1;
     if(msg==WM_PAINT){Paint(h);return 0;}
+    if(msg==WM_KEYDOWN&&!mero_standby){
+        if(w==VK_LEFT)Queue("ambient-prev",0);else if(w==VK_RIGHT)Queue("ambient-next",0);
+        else if(w==VK_ESCAPE){MeroReturnToShell();DestroyWindow(h);}return 0;
+    }
+    if(msg==WM_CHAR&&!mero_standby){if(w==' ')Queue("ambient-pause",0);else if(w=='w'||w=='W')weatherVisible=!weatherVisible;
+        else if(w=='m'||w=='M')menuVisible=!menuVisible;InvalidateRect(h,NULL,FALSE);return 0;}
     if(msg==WM_LBUTTONDOWN&&!mero_standby) {
         int x=LOWORD(l),y=HIWORD(l),ok=0;if(portrait){int px=x;x=y;y=479-px;}
         if(WeatherTap(x,y)){InvalidateRect(h,NULL,FALSE);return 0;}

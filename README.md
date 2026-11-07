@@ -86,3 +86,6 @@ rtk make check
 ```
 
 Copy the resulting binary to `\SDMMC\MERO\mero-probe.exe` on the SD card, update the device's navigation executable path in settings, and launch.
+# Current companion setup
+
+For Bluetooth agent operation and the latest installed device state, read [AGENTS.md](AGENTS.md) and [docs/NEXT_SESSION.md](docs/NEXT_SESSION.md). For installation on a new host, including permanent keyboard access without repeated sudo prompts, read [docs/INSTALLATION.md](docs/INSTALLATION.md).
