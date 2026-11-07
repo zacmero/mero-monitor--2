@@ -7,6 +7,8 @@
 #include "../mero-live-zlib.h"
 static DWORD photoGetMs,photoDecodeMs,photoBytes;
 static DWORD liveGetMs,liveSendMs,livePeriodMs,liveFrameBytes,liveSamples,liveLastTick,jobGetMs;
+static DWORD eventQueueMs,eventWriteMs,eventFirstSendMs;
+static char eventMeasuredId[80];
 static unsigned int liveJobHint;static DWORD liveJobHintTick;static int liveJobHintValid;
 static unsigned char agentKey[32];
 static WCHAR agentRoot[160];
@@ -25,6 +27,9 @@ static void AgentStatusExtras(char *result,unsigned int cap) {
     snprintf(result+len,cap-len,"photo_bytes=%lu\nphoto_get_ms=%lu\nphoto_decode_ms=%lu\n",photoBytes,photoGetMs,photoDecodeMs);
     len=strlen(result);
     snprintf(result+len,cap-len,"live_get_ms=%lu\nlive_send_ms=%lu\nlive_period_ms=%lu\nlive_frame_bytes=%lu\nlive_samples=%lu\njob_get_ms=%lu\n",liveGetMs,liveSendMs,livePeriodMs,liveFrameBytes,liveSamples,jobGetMs);
+    len=strlen(result);
+    snprintf(result+len,cap-len,"event_id=%s\nevent_queue_ms=%lu\nevent_write_ms=%lu\nevent_first_send_ms=%lu\n",
+        eventMeasuredId,eventQueueMs,eventWriteMs,eventFirstSendMs);
     if(MeroBusLock()) {
         len=strlen(result);
         snprintf(result+len,cap-len,"live_generation=%lu\nlive_age_sec=%lu\nlive_weather=%d\nlive_music=%d\nlive_ack=%s\nlive_result=%s\n",
@@ -45,7 +50,12 @@ static int AgentSend(const char *name,const WCHAR *path){
     HANDLE f=CreateFileW(path,GENERIC_READ,FILE_SHARE_READ,NULL,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,NULL);DWORD size,got;unsigned int total=0,n,take,response;int first=1,ok=1;
     if(f==INVALID_HANDLE_VALUE)return 0;size=GetFileSize(f,NULL);if(size>AGENT_MAX_FILE){CloseHandle(f);return 0;}
     do{n=ObexRequest(packet,2,haveId,connectionId,first?name:NULL,NULL);if(first){packet[n++]=0xc3;ObexWrite32(packet+n,size);n+=4;}
-        unsigned int limit=peerLimit;if(limit>512)limit=512;
+        unsigned int limit=peerLimit;
+        /* Small control PDUs fit one bounded RFCOMM send, avoiding a split
+           across legacy provider writes. Bulk files retain the verified cap. */
+        unsigned int cap=(!strcmp(name,"live-event.txt")||!strcmp(name,"keyboard-result.txt")||!strcmp(name,"live-codec.txt"))?256:512;
+        if(limit>cap)limit=cap;
+        if(limit<=n+3){ok=0;break;}
         take=limit-n-3;if(take>size-total)take=size-total;
         packet[0]=(total+take==size)?0x82:2;packet[n++]=(total+take==size)?0x49:0x48;ObexWrite16(packet+n,take+3);n+=2;
         if(!ReadFile(f,packet+n,take,&got,NULL)||got!=take){ok=0;break;}n+=take;ObexWrite16(packet+1,n);response=Exchange(n);
@@ -214,12 +224,18 @@ static void AgentLiveEvent(void){
             snprintf(event,sizeof(event),"v=1\ndevice=%s\n%s",MERO_AGENT_DEVICE,mero_bus->event);
     }ReleaseMutex(mero_bus_mutex);
     if(event[0]&&AgentSign(event,sizeof(event),agentKey)){
-        DWORD begin=GetTickCount();
+        DWORD begin=GetTickCount(),wrote;int written,first=strcmp(eventMeasuredId,id)!=0;
+        if(first){const char *tick=strrchr(id,'-');strcpy(eventMeasuredId,id);
+            eventQueueMs=tick?(DWORD)(begin-strtoul(tick+1,NULL,10)):0;
+            eventWriteMs=eventFirstSendMs=0;}
         CreateDirectoryW(L"\\Temp",NULL);
-        if(AgentWrite(L"\\Temp\\MeroLiveEvent.txt",event,strlen(event))&&AgentSend("live-event.txt",L"\\Temp\\MeroLiveEvent.txt")){
+        written=AgentWrite(L"\\Temp\\MeroLiveEvent.txt",event,strlen(event));wrote=GetTickCount();
+        if(first)eventWriteMs=wrote-begin;
+        if(written&&AgentSend("live-event.txt",L"\\Temp\\MeroLiveEvent.txt")){
             strcpy(sentId,id);sentTick=GetTickCount();
         }else ClosePeer();
         liveSendMs=GetTickCount()-begin;
+        if(first)eventFirstSendMs=GetTickCount()-wrote;
     }
 }
 static void AgentLive(void) {

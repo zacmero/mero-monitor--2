@@ -62,6 +62,7 @@ check:
 	python3 scripts/check_live_feed.py
 	python3 scripts/check_companion.py
 	python3 scripts/check_agent.py
+	python3 scripts/check_agent_send.py
 	cc -Wall -Wextra -Werror scripts/check_obex.c -o /tmp/mero-check-obex
 	/tmp/mero-check-obex
 
