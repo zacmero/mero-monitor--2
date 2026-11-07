@@ -123,3 +123,13 @@ User reports very slow refresh and duplicated input with both physical and touch
 - [ ] Test, deploy and measure on hardware; document actual behavior and limits.
 
 User ended work for sleep. Preserve the open latency issue and resume from the top of docs/NEXT_SESSION.md. Current code is deployed and tests pass, but the latest isolated round trip remains6314ms; no reliable speed fix is claimed. Complete commits/push/handoff only tonight; no further experiments.
+
+## Resume: portrait music and terminal control transport
+- [x] Authenticate the current device and confirm fresh telemetry.
+- [x] Implement music portrait layout, saved-orientation feed and rotated touch coordinates.
+- [x] Build/check and inspect initial portrait device capture.
+- [x] Deploy final tested music source and record backup/read-back.
+- [x] Test real AgentSend packet bounds; install scoped 256-byte control PDU experiment with first-attempt timings through protected upgrade.
+- [x] Measure three isolated terminal round trips and record first-attempt timings.
+- [ ] Continue terminal responsiveness work: current median1330ms remains variable; physical typing confirmation pending.
+- [x] Commit/push verified milestones and update handoff.

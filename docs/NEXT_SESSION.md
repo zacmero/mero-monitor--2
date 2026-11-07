@@ -1,3 +1,25 @@
+# Current checkpoint: portrait Music and measured terminal transport (2026-11-07)
+
+Resume here; the overnight STOP marker below is historical. User resumed terminal work and requested Music follow the device orientation.
+
+- Music milestone `0e542bc`: follows authenticated AMB portrait setting, full 272x480 logical layout and inverse touch mapping; no extra app orientation toggle. Artwork remains one bounded 112x112 RGB565 RAM cover. Default app/config/boot settings unchanged.
+- Final music stop641/put642/get643:179936B SHA256 `8fe7fdca283886e6821bb62a71c097fba6e598450c4552441c05f99f28f791d8`. Backup642 retains the intermediate portrait build; **backup626 retains the original landscape build**. Initial screen629/get630 confirmed portrait layout. Launch655 opens final source build; screen656/get657 exactly matches the inspected portrait capture (SHA2561677f9059d95636146c45a6b080cf10e960a2d3efc461a31e6073c9cc7586c7f). No active PC music session during capture; playback/artwork were not reverified today.
+- Transport milestone `454cfe4`: small control PDUs256, bulk512, socket writes256. Protected upgrade through status638: agent SHA256 `00580b7a3e7ae1c935da9081330b93dfd9f9c3dca0c96342bea3f144e50bd1a0`, prior agent backup `\SDMMC\BT\AgentUpdate\old-b2bf6449c1d858a2.exe`. Same navigation path/key; no firmware/boot changes.
+- Agent status now reports `event_id`, `event_queue_ms`, `event_write_ms`, `event_first_send_ms`. These retain the first attempt rather than masking it with later retries. Actual-AgentSend host harness covers both caps, byte-exact bodies, empty files, small-peer and exchange errors.
+- Updated latency probe put644:19456B SHA256 `11ec0f2ec21302e8b823f7aed04d2e7a3801474f6d3981ce1e51675a0868c735`. It now writes `ok=0` if terminal is not foreground, preventing stale success reports. **After agent upgrade, explicitly launch terminal before measuring**: agent startup may take foreground. Launch639 was invalid and GET640 matched yesterday; excluded.
+- Three isolated fresh probes (10s deferral, no RPC during measurement):
+  - launch646/get647:2103ms, queued125, ACK2103; reportSHA `780ace857ddbc3fa1e2654d2f1d9d61ee00fe97574fba2f120d5299c03cf63f8`.
+  - launch649/get650:941ms, queued121, ACK941; reportSHA `870517ef8861ae848cefd495b683ef6f442b2fbd921a251afe25e6c3fb64a264`.
+  - launch652/get653:1330ms, queued119, ACK914; reportSHA `50bf11f1e8f3ce7a659c5301441c7013d7c4d745951a34a8aa028da760d978b3`.
+  - All output occurrence counts1. Median1330ms; this measures authenticated RAM frame receipt, not final paint. Variable, still not an instant terminal; no controlled before/after speedup claim. Yesterday's6314ms remains a historical observation.
+- Status654 matched last event ID: queue109ms, Temp write1ms, first OBEXsend263ms, liveGET359ms, frame1399B, period503ms, live age0. A host file observer during third run saw154ms event arrival→publishedACK (diagnostic only, no commands/keys logged). Remaining latency comes from transport/publication/frame scheduling and should be investigated before further architecture changes. No SPP connection has been tried.
+- Terminal binary remains prior verified18d00491…; background Bash retained. Physical capture off. Human confirmation of physical/touch key duplication remains needed; native duplicate/touch-guard tests and all three injected round trips pass.
+- Full `make`, `make check`, new sender test, music orientation tests and whitespace check passed. Generated/keyed binaries excluded from git. User services remain active. Device stays in ActiveSync/PC Link.
+
+Next terminal work: collect multiple actual typing/paint timings; preserve deduplication, active-seat/lock release and no-window keyboard operation. Consider a controlled old/new packet-cap comparison if needed; do not infer causality from the small variable sample. Keep the Music portrait milestone available independently.
+
+---
+
 # Foston handoff — 2026-11-07
 
 ## STOP HERE: overnight checkpoint — terminal latency still unresolved
