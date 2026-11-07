@@ -197,3 +197,10 @@ Benchmark audit: initial immediate-injection timing results were confounded by t
 ### Portrait music: edge-to-edge cover
 - User requested larger song artwork reaching the screen edge. Draw the same bounded112x112 RAM source into a272x272 portrait square at x0,y36, with song text/progress/buttons below. Landscape retained. Portrait controls moved to y421 and touch mapping fixture updated.
 - Full make/check and diff check passed. Stop658/put659 backed up the previous deck;180638B SHA25693f73cf9da319731d1203485905f4112ce31d569a4818cfc5106bee3f3f1f973. GET660 byte-exact read-back confirmed. Launch661, screenshot662/get663 visually verified actual playing cover (Up on the Hill) reaching both edges, with text and controls below.
+
+### Higher-resolution music artwork
+- Found source bottleneck: current Firefox-exported art is60x60. New host pipeline prefers matching high-resolution track art, resizes to native272x272 and sends JPEG bounded60000B (current19288B). Offline fallback remains restricted Firefox cache. Host caches remain bounded; device never stores cover files.
+- New versioned272-square RGB565 RAM cache, exact-dimension JPEG decoder and hash validation; one cover, cleared on song/app changes. Source/decoder/tiny-image rejection/track-bound-cache tests passed, as did full make/check.
+- Stop664; protected upgrade through status671 verified agent5d1997b73b34fdde90ff4048755479d2f894129e3606fad8ae6f29299a454744, backup BT/AgentUpdate/old-52462ed6200a1cda.exe. Bridge restarted successfully; both user services active. Matching app deployment underway.
+
+- Final music put672/get673 verified180638B SHAf3b83d84…; backup672 preserves previous112-square app. Launch674 then screen675/get676 visually verified crisp native-width actual album artwork and fresh Korean Bodega track/timing. ScreenshotSHA9a7e142e…. Formats/versioned ABI and paired rollback requirements documented.

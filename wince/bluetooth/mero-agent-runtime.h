@@ -184,7 +184,7 @@ static void AgentAmbient(const char *sha) {
     free(pixels);
 }
 static void AgentArtwork(const char *sha,const char *track) {
-    char file[96],actual[65];BYTE digest[32];unsigned int n,i;AuthHash hash;
+    char file[96],actual[65];BYTE digest[32];unsigned int n,i;AuthHash hash;unsigned short *pixels;
     if(!FindWindowW(L"MERO_MUSIC",NULL)) {
         if(mero_art&&MeroBusLock()){memset(mero_art,0,sizeof(*mero_art));ReleaseMutex(mero_bus_mutex);MeroArtClose();}
         return;
@@ -196,13 +196,17 @@ static void AgentArtwork(const char *sha,const char *track) {
         if(!strcmp(mero_art->sha,sha)){strcpy(mero_art->track,track);ReleaseMutex(mero_bus_mutex);return;}
         ReleaseMutex(mero_bus_mutex);
     }
-    snprintf(file,sizeof(file),"art-%s.565",sha);
+    snprintf(file,sizeof(file),"art-%s.jpg",sha);
     if(!GetBody(file,NULL,INVALID_HANDLE_VALUE,&n)){ClosePeer();return;}
-    if(n!=MERO_ART_BYTES)return;
+    if(n<4||n>60000)return;
     AuthInit(&hash);AuthUpdate(&hash,xml,n);AuthFinal(&hash,digest);AuthHex(digest,32,actual);
-    if(strcmp(actual,sha)||!FindWindowW(L"MERO_MUSIC",NULL)||!MeroBusLock())return;
-    memcpy(mero_art->pixels,xml,n);strcpy(mero_art->sha,sha);strcpy(mero_art->track,track);
-    ReleaseMutex(mero_bus_mutex);
+    if(strcmp(actual,sha)||!FindWindowW(L"MERO_MUSIC",NULL))return;
+    pixels=(unsigned short*)malloc(MERO_ART_BYTES);if(!pixels)return;
+    if(MeroArtDecode((unsigned char*)xml,n,pixels)&&FindWindowW(L"MERO_MUSIC",NULL)&&MeroBusLock()) {
+        memcpy(mero_art->pixels,pixels,MERO_ART_BYTES);strcpy(mero_art->sha,sha);strcpy(mero_art->track,track);
+        ReleaseMutex(mero_bus_mutex);
+    }
+    free(pixels);
 }
 #include "mero-keyboard.h"
 static int AgentTerminalActive(void);

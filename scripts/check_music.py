@@ -20,10 +20,10 @@ static int portrait=1;
 static int mainWindow,canNext,canPrevious,canPlay,canSeek,haveState;
 static unsigned int tick,received,position,duration;
 static char track[32],playback[24],artHash[65],paintedArt[65];static WCHAR title[192],artist[192],notice[96];
-#define MERO_ART_SIDE 112
-static DWORD displayArt[112*112],*artBits=displayArt;
+#define MERO_ART_SIDE 272
+static DWORD displayArt[272*272],*artBits=displayArt;
 static int mero_bus_mutex;
-static struct {char sha[65],track[32];unsigned short pixels[112*112];} cachedArt,*mero_art=&cachedArt;
+static struct {char sha[65],track[32];unsigned short pixels[272*272];} cachedArt,*mero_art=&cachedArt;
 static int MeroArtOpen(void){return 1;}
 static int MeroBusLock(void){return 1;}
 static void ReleaseMutex(int mutex){(void)mutex;}

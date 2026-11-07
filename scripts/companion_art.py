@@ -1,51 +1,55 @@
-"""Resize MPRIS artwork on the PC; publish only content-addressed RGB565 thumbs."""
-from array import array
+"""Resize MPRIS artwork on the PC; publish only content-addressed bounded JPEG covers."""
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import io
 from pathlib import Path
 import re
-import sys
 import time
 from urllib.parse import unquote, urlsplit
 from urllib.request import Request, urlopen
 
-SIDE=112
+SIDE=272
+MAX_ENCODED=60000
 
 
-def rgb565(raw):
+def jpeg(raw):
     from PIL import Image, ImageOps
     with Image.open(io.BytesIO(raw)) as original:
         if original.width*original.height>16000000:
             raise ValueError("artwork image too large")
         image=ImageOps.fit(original.convert("RGB"),(SIDE,SIDE),method=Image.Resampling.LANCZOS)
-    pixels=array("H",((r>>3)<<11|(g>>2)<<5|(b>>3) for r,g,b in image.getdata()))
-    if sys.byteorder!="little":pixels.byteswap()
-    return pixels.tobytes()
+    for quality in (92,85,75,65):
+        output=io.BytesIO();image.save(output,format="JPEG",quality=quality,subsampling=0)
+        if len(output.getvalue())<=MAX_ENCODED:return output.getvalue()
+    raise ValueError("encoded artwork too large")
 
 
 def load_art(state):
+    from PIL import Image
     url=urlsplit(state.get("art_url",""))
-    if url.scheme=="file" and url.hostname in (None,""):
-        path=Path(unquote(url.path)).resolve()
-        # Firefox exports this purpose-specific cache; never copy arbitrary files.
-        firefox=(Path.home()/".mozilla/firefox").resolve()
-        try:
-            if path.is_relative_to(firefox) and path.parent.name=="firefox-mpris" and path.stat().st_size<=4000000:
-                return rgb565(path.read_bytes())
-        except (OSError,ValueError):pass
     hosts={"lh3.googleusercontent.com","yt3.ggpht.com","i.ytimg.com","lh3.ggpht.com"}
     urls=[]
     if url.scheme=="https" and url.hostname in hosts:urls.append(url.geturl())
     if re.fullmatch(r"[A-Za-z0-9_-]{11}",state["track"]):
-        urls.append(f'https://i.ytimg.com/vi/{state["track"]}/hqdefault.jpg')
+        urls.extend(f'https://i.ytimg.com/vi/{state["track"]}/{size}.jpg' for size in ("maxresdefault","hqdefault"))
+    # Firefox's MPRIS export may be only 60px: prefer a real high-resolution
+    # source before falling back to that bounded, purpose-specific local file.
     for target in urls:
         try:
             with urlopen(Request(target,headers={"User-Agent":"Mero-Companion/1.0"}),timeout=3) as response:
                 raw=response.read(4000001)
-            if len(raw)<=4000000:return rgb565(raw)
-        except (OSError,ValueError):
-            continue
+            if len(raw)>4000000:continue
+            with Image.open(io.BytesIO(raw)) as image:
+                if min(image.size)<SIDE:continue
+            return jpeg(raw)
+        except (OSError,ValueError):continue
+    if url.scheme=="file" and url.hostname in (None,""):
+        path=Path(unquote(url.path)).resolve()
+        firefox=(Path.home()/".mozilla/firefox").resolve()
+        try:
+            if path.is_relative_to(firefox) and path.parent.name=="firefox-mpris" and path.stat().st_size<=4000000:
+                return jpeg(path.read_bytes())
+        except (OSError,ValueError):pass
     raise ValueError("no artwork available")
 
 
@@ -53,7 +57,7 @@ class Artwork:
     def __init__(self,share):
         self.share=Path(share);self.pool=ThreadPoolExecutor(max_workers=1)
         self.future=None;self.pending=None;self.current=None;self.sha="";self.retry=0
-        self.retained=sorted((p for p in self.share.glob("art-*.565") if re.fullmatch(r"art-[a-f0-9]{64}\.565",p.name)),key=lambda p:p.stat().st_mtime)
+        self.retained=sorted((p for p in self.share.glob("art-*") if re.fullmatch(r"art-[a-f0-9]{64}\.(?:jpg|565)",p.name)),key=lambda p:p.stat().st_mtime)
         for old in self.retained[:-4]:old.unlink(missing_ok=True)
         self.retained=self.retained[-4:]
 
@@ -68,7 +72,7 @@ class Artwork:
         if self.future and self.future.done():
             try:
                 pixels=self.future.result();sha=hashlib.sha256(pixels).hexdigest()
-                path=self.share/f"art-{sha}.565";path.parent.mkdir(parents=True,exist_ok=True)
+                path=self.share/f"art-{sha}.jpg";path.parent.mkdir(parents=True,exist_ok=True)
                 if not path.exists():
                     temp=path.with_suffix(".tmp");temp.write_bytes(pixels);temp.replace(path)
                 self.current,self.sha=self.pending,sha

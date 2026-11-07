@@ -133,3 +133,12 @@ User ended work for sleep. Preserve the open latency issue and resume from the t
 - [x] Measure three isolated terminal round trips and record first-attempt timings.
 - [ ] Continue terminal responsiveness work: current median1330ms remains variable; physical typing confirmation pending.
 - [x] Commit/push verified milestones and update handoff.
+
+## Native-resolution music cover
+- [x] Find upstream resolution limit: Firefox current export is60x60.
+- [x] Prefer high-resolution song thumbnail; prepare bounded272x272 JPEG (current19,288B).
+- [x] Add exact-dimension native decoding and versioned one-cover RGB565 mapping.
+- [x] Verify native decoder, source selection, stale-track clearing and compression/feed regression checks.
+- [x] Protected agent upgrade; stopped-app deployment/read-back; restart bridge.
+- [x] Verify actual rendered cover through authenticated screen675/get676.
+- [x] Record installed hashes/backups; commit and push.

@@ -89,7 +89,7 @@ replay interrupted mutations. Check the last job and backup if power was lost.
   reports `live_generation`, `live_age_sec`, `live_weather` and `live_music`.
   Increasing generations with a small age verify agent reception, not app rendering.
 - Music artwork uses a separate single-entry RAM mapping. Keep it bounded to one
-  112×112 RGB565 thumbnail. Clear obsolete artwork on track changes and app close.
+  272×272 RGB565 cover. Clear obsolete artwork on track changes and app close.
   Do not replace this with accumulating cover files or per-frame SD writes.
 - For a read-only visual check, deploy/build `wince/probe/mero-screen.exe`, launch
   it through the agent, retrieve `/SDMMC/MERO/screen.rle`, then run

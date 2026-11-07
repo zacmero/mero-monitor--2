@@ -1,3 +1,15 @@
+## Current artwork checkpoint: native272x272 (2026-11-07)
+
+The prior112-square notes below are historical. Firefox's current MPRIS export was only60x60. The host now prefers matching high-resolution song artwork, prepares272x272 JPEG (quality92, lower only to enforce60000B cap), and retains the restricted Firefox file as offline fallback. Current cover is19288B, smaller than the old25088B raw transfer. Host owned caches remain bounded; no cover files are written to the Foston.
+
+- Agent authenticates encoded hash then validates exact272x272 JPEG dimensions before allocation/decoding. One147968B RGB565 cover in versioned `MERO_ART565_V2`; music drawing cache is bounded to the same image. Old artwork clears on track changes/app close. Ambient still requires240x136. Socket/PDU limits unchanged.
+- Protected agent upgrade through signed status671: SHA256 `5d1997b73b34fdde90ff4048755479d2f894129e3606fad8ae6f29299a454744`; previous agent backup `\SDMMC\BT\AgentUpdate\old-52462ed6200a1cda.exe` (old agent uses112-square V1). Navigation path/key unchanged.
+- Music stop664/put672/get673/launch674:180638B SHA256 `f3b83d8469aaf1cea8c1c2bd253def9083f34b314302c0da780b6968435c173d`, previous binary backup672 (112-square ABI). Rollback must restore matching agent/music/host formats together; a code-only rollback is insufficient.
+- Bridge restarted with new JPEG publisher, both services active. Actual screenshot675/get676 visually confirms sharp full-width album cover and working track/timing feed (Korean Bodega / Fun Lovin’ Criminals). Capture SHA256 `9a7e142ec015b48854ae513f479f3c1f709747cff6a66dba901db8b8235d3111`.
+- Full make/check and whitespace checks pass. Tests cover high-resolution preference, undersized network rejection, source preservation, offline file fallback, reused export path, stale track handling and actual native decoder dimensions/truncation/encoded-size bounds. AGENTS artwork contract now reflects272-square single-cache limit authorized by the user's resolution request.
+
+---
+
 
 ## Latest music update: edge-to-edge cover (2026-11-07)
 Portrait artwork now fills a272x272 square across both screen edges. Track text, progress and controls sit below it; landscape and the single112x112 RGB565 RAM source are preserved. Stop658/put659/get660 verified180638B SHA256 `93f73cf9da319731d1203485905f4112ce31d569a4818cfc5106bee3f3f1f973`; backup659 restores the prior portrait deck. Launch661 and screen662/get663 verified actual playing artwork (Up on the Hill, Fun Lovin’ Criminals), full-width cover and unobstructed controls. ScreenSHA256 `8e0384b11e19d49a97cdc70598d22222bdd8b07af153347e22e5cd24ebc6c35b`. Full make/check and whitespace checks passed.
