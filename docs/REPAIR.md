@@ -261,4 +261,3 @@ Fresh isolated launch646/649/652 reports received authenticated terminal output 
 
 ## Latest music update: edge-to-edge cover (2026-11-07)
 Portrait artwork now fills a272x272 square across both screen edges. Track text, progress and controls sit below it; landscape and the single112x112 RGB565 RAM source are preserved. Stop658/put659/get660 verified180638B SHA256 `93f73cf9da319731d1203485905f4112ce31d569a4818cfc5106bee3f3f1f973`; backup659 restores the prior portrait deck. Launch661 and screen662/get663 verified actual playing artwork (Up on the Hill, Fun Lovin’ Criminals), full-width cover and unobstructed controls. ScreenSHA256 `8e0384b11e19d49a97cdc70598d22222bdd8b07af153347e22e5cd24ebc6c35b`. Full make/check and whitespace checks passed.
-
