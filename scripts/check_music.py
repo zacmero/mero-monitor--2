@@ -16,6 +16,7 @@ shim=r'''
 typedef unsigned int DWORD;typedef wchar_t WCHAR;
 #define FALSE 0
 #define lstrcpyW wcscpy
+static int portrait=1;
 static int mainWindow,canNext,canPrevious,canPlay,canSeek,haveState;
 static unsigned int tick,received,position,duration;
 static char track[32],playback[24],artHash[65],paintedArt[65];static WCHAR title[192],artist[192],notice[96];
@@ -33,6 +34,12 @@ static void Wide(WCHAR *out,int cap,const char *s){int i;for(i=0;s[i]&&i<cap-1;i
 tests=r'''
 static void frame(const char *text){char line[1024];strcpy(line,text);HostLine(line);}
 int main(void){
+ int x=479-395,y=137;
+ MusicCoordinates(&x,&y);assert(x==137&&y==395); /* Portrait play button. */
+ portrait=0;x=240;y=210;MusicCoordinates(&x,&y);assert(x==240&&y==210);
+ portrait=1;
+ frame("MERO:AMB:folder=test|portrait=0|weather=1");assert(!portrait&&!haveState);
+ frame("MERO:AMB:portrait=1|folder=test");assert(portrait&&!haveState);
  tick=100000;frame("MERO:NOW:status=PLAYING|title=First|artist=Artist|track=abcdefghijk|pos=10|len=100|playpause=1|next=1|seek=1|art=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
  assert(Fresh()&&canPlay&&canNext&&canSeek&&duration==100&&CurrentPosition()==10);
  assert(strlen(artHash)==64);
@@ -50,7 +57,7 @@ int main(void){
  frame("MERO:NOW:status=PLAYING|title=Unknown timing|track=lmnopqrstuv|pos=0|len=0");
  assert(duration==0&&!canPlay&&!canNext&&!canSeek);
  frame("MERO:NOW:status=UNAVAILABLE|title=Open music|track=|pos=0|len=0");assert(!Fresh());
- puts("PASS: native music track changes, progress, pause, missing timing and stale freeze");return 0;
+ puts("PASS: native music orientation/touch transform, track changes, progress, pause and stale freeze");return 0;
 }
 '''
 with tempfile.TemporaryDirectory() as directory:
