@@ -15,6 +15,8 @@ LIBS        := -lws2 -lcoredll
 .PHONY: all clean docker-build
 
 all: $(TARGET) mero-screen.exe mero-boot-probe.exe
+mero-firmware-probe.exe: mero-firmware-probe.c
+	docker run --rm -u $(shell id -u):$(shell id -g) -v "$(CURDIR)":/work -w /work $(DOCKER_IMG) arm-mingw32ce-gcc $(CFLAGS) -s -o $@ $< $(LDFLAGS) -lcoredll
 mero-backlight-min.exe: mero-backlight-min.c ../mero-cinema-backlight.h
 	docker run --rm -u $(shell id -u):$(shell id -g) -v "$(CURDIR)/..":/work -w /work/probe $(DOCKER_IMG) arm-mingw32ce-gcc $(CFLAGS) -s -o $@ $< $(LDFLAGS) -lcoredll
 mero-boot-probe.exe: mero-boot-probe.c ../mero-usb.h
