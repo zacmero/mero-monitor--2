@@ -75,5 +75,31 @@ Stream YouTube Music state from the Linux bridge to `mero-media-ctrl.exe` reliab
 - [ ] Re-test saved YouTube Music default and Bluetooth after real power cycle.
 - User confirmed v0.3.0 and saved Music preference, but no app start/BT persistence; USB booted Mass Storage. Shell BT button reports launch failure. Exact keyed agent recovery path has been provided.
 - User's vendor USB changes/reset restored operation; native report confirmed Serial_Class / COM6.
-- [ ] Deploy shell 0.3.1 and the final agent pause-cancellation fix, then validate hardware mode switching and cold-power startup.
+- [x] Shell and agent fixes deployed, now superseded by 0.3.2. Hardware mode change from Mass Storage and cold-power retest remain pending.
 - Paused overnight at the user's request. See docs/NEXT_SESSION.md for exact installed and prepared builds.
+
+## Ambient Home implementation — 2026-11-06
+
+1. [x] Add bounded asynchronous host photo-folder renderer and authenticated ambient actions.
+2. [x] Receive verified 240x136 RGB565 frames into a separate RAM mapping, gated by the Ambient window.
+3. [x] Add native Ambient Home with folder selection, slideshow controls, weather freshness and shell exit; preserve gallery.
+4. [x] Register in shell/default selection; test, build, back up, deploy and inspect actual device rendering.
+5. [x] Record installed hashes, evidence and remaining limits.
+
+- [x] Ambient full-interface orientation with shell/menu controls; native screenshot and shell touch verified.
+- [x] JPEG frames and device timing measurements; exact readbacks and decoder guards tested.
+- [x] Cinema black pixels plus verified BKL1 D4/off and D0 restoration; Bluetooth remained alive.
+
+- [x] Native Backlight touch app with bounded OEM controls, portrait layout, shell entry, actual-C checks, native screen capture and byte-exact backed-up deployment.
+
+## Firmware investigation — 2026-11-07
+
+Scope: read-only probing, backup audit and offline reverse engineering. No firmware flashing, erase, boot edits or guessed hardware controls. Preserve current recovery and keys.
+
+- [x] Audit existing local backups and classify file copies versus complete firmware/bootloader images.
+- [x] Inventory available boot/startup/power and storage configuration using a bounded read-only helper.
+- [x] Hash and archive collected evidence privately; record gaps and recovery prerequisites.
+- [x] Inspect copied OEM startup/power components offline and identify evidence-backed next probes; full reverse engineering remains ongoing.
+- [x] Write an initial firmware research report and next-session handoff with verified facts and unresolved hypotheses.
+
+User requested Ambient Home opened in portrait first; leave it visible while research proceeds.
