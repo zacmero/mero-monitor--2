@@ -71,3 +71,20 @@ collects signed read-only file backups and verifies hashes; it does not create
 a full firmware image or prove restoration. Keep an independent private copy.
 Do not roll back host counters/device journals, synchronize resident flash,
 flash firmware or inject boot failures as routine recovery testing.
+
+
+## Cascadia Nerd Font terminal atlas
+The Foston terminal embeds a bounded bitmap atlas generated from the user's
+CaskaydiaCove Nerd Font Mono Regular. Rebuild it with:
+
+```bash
+rtk proxy python3 scripts/generate_terminal_font.py --font /absolute/path/CaskaydiaCoveNerdFontMono-Regular.ttf
+rtk make -C wince/terminal
+```
+
+The generator needs existing Pillow and fontconfig (`fc-query`); the generated
+header is checked in, so normal builds do not require the original font file.
+Font source SHA256 is recorded in the header. Licenses/attribution are under
+wince/terminal. Icons are embedded in this app; a system-wide CE font is not
+installed. Original UTF8 keyboard input is preserved. Supplementary Nerd icon
+output uses reserved compact display cells, not literal remapped input.

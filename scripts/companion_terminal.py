@@ -12,6 +12,7 @@ import secrets
 import socket
 import subprocess
 import time
+import unicodedata
 
 from companion_live import atomic, verified
 from companion_keyboard import Keyboard, KeysHeld
@@ -19,6 +20,24 @@ from companion_keyboard import Keyboard, KeysHeld
 TARGETS = {"terminal": "MERO_TERMINAL", "shell": "MeroShellWndClass",
            "ambient": "MERO_AMBIENT", "backlight": "MERO_BACKLIGHT",
            "music": "MERO_MUSIC"}
+
+
+def terminal_cells(row,cols):
+    """One UTF-16 code unit per terminal cell, including wide-cell continuation."""
+    cells=[]
+    for char in unicodedata.normalize("NFC",row):
+        if unicodedata.combining(char) or unicodedata.category(char) in ("Cf","Mn","Me"):continue
+        width=1 if 0xf0000<=ord(char)<=0xf2fff else 2 if unicodedata.east_asian_width(char) in ("W","F") else 1
+        if len(cells)+width>cols:break
+        code=ord(char)
+        if code<32 or code==127:char=" "
+        elif 0xf0000<=code<=0xf2fff:
+            # Reserved wire cells keep supplementary Nerd icons at two bytes.
+            char=chr(code-0xf0000+0xa000);width=1
+        elif code>0xffff or 0xa000<=code<=0xcfff or 0xd800<=code<=0xdfff:char="□"
+        cells.append(char)
+        if width==2:cells.append("\0")
+    return "".join(cells)
 
 
 def socket_path():
@@ -176,7 +195,7 @@ class Terminal:
         try:
             if self.active:
                 # Plain capture omits ANSI/OSC escapes. Bound every row and use
-                # ASCII cells so cell widths and the 4KB signed feed stay exact.
+                # UTF-16 cells preserve symbols while bounding the signed 4KB feed.
                 args = ["capture-pane", "-p", "-t", "foston:0.0"]
                 if self.scroll:
                     args += ["-S", str(-self.scroll), "-E", str(self.rows-1-self.scroll)]
@@ -186,14 +205,14 @@ class Terminal:
                 if not marker:raise ValueError("missing terminal cursor")
                 cx, cy = map(int,cursor.strip().split(':'))
                 rows = raw.splitlines()[:self.rows]
-                text = "\n".join("".join(c if 32 <= ord(c) < 127 else "?" for c in row)[:self.cols] for row in rows)
+                text = "\n".join(terminal_cells(row,self.cols) for row in rows)
                 self.status = "SCROLLBACK" if self.scroll else "PC SESSION"
         except (OSError, ValueError, subprocess.SubprocessError):
             self.active = False
             self.status = "Session ended / tap CONNECT"
-        encoded = base64.b64encode(text.encode("ascii")).decode()
+        encoded = base64.b64encode(text.encode("utf-16le")).decode()
         return (f"MERO:TERM:token={self.token}|cols={self.cols}|rows={self.rows}|cx={cx}|cy={cy}"
-                f"|scroll={self.scroll}|active={int(self.active)}|physical={int(self.physical)}|input={self.keyboard_notice}|status={self.status}|text={encoded}")
+                f"|scroll={self.scroll}|active={int(self.active)}|physical={int(self.physical)}|input={self.keyboard_notice}|status={self.status}|encoding=u16|text={encoded}")
 
     def finish_client(self, result):
         if self.client:

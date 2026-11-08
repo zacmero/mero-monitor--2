@@ -163,3 +163,13 @@ Recovery audit: readable resident Mero shell 64000B and SD shell 66560B are
 different preservation targets; no automatic resident sync is needed. Agent
 path remains SDMMC/BT/Downloads/101907-mero-agent.exe. File backup cannot restore
 bootloader, full CE ROM, NAND geometry or unavailable Bluetooth pairing keys.
+
+2026-11-08 display update: Ambient was stretching 240x136 frames; native
+480x272 now uses versioned V2 RAM mapping and bounded <65280-byte JPEGs, with
+legacy frame upscaling in the agent. Measured photo41613B/5370ms transfer,
+145ms decode; physical screen capture confirms full portrait photo and fresh
+weather. Terminal previously stripped all non-ASCII. User specifically wants
+Nerd Font icons and uses Cascadia Code, not a Portuguese/accent priority.
+Embedded 11552 glyphs from installed CaskaydiaCove Nerd Font Mono; source hash
+in generated header, font and Nerd attribution preserved. Supplementary Nerd
+icons use reserved wire cells A000..CFFF, input remains original UTF8.

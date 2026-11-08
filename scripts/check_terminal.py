@@ -11,11 +11,16 @@ import time
 from types import SimpleNamespace
 from unittest.mock import patch
 import companion_live as live
-from companion_terminal import Terminal, TARGETS
+from companion_terminal import Terminal, TARGETS, terminal_cells
 from companion_keyboard import Layout,Keyboard,EVENT,KeysHeld
 
 
 def check():
+    assert terminal_cells("ação café ┌─┐ ←→ ∑ ⣿",32)=="ação café ┌─┐ ←→ ∑ ⣿"
+    assert terminal_cells("a\u0303",1)=="ã"
+    assert terminal_cells("\ue0b0\uf07b\U000f013a",3)=="\ue0b0\uf07b\ua13a"
+    assert terminal_cells("界x",3)=="界\0x" and terminal_cells("界",1)==""
+    assert terminal_cells("🙂x",3)=="□\0x"
     layout=Layout('us')
     try:
         assert layout.event(30,1)==b'a';layout.event(30,0)
@@ -79,11 +84,28 @@ def check():
                 if '\nROUNDTRIP_OK\n' in screen:break
                 time.sleep(.05)
             assert screen.count('\nROUNDTRIP_OK\n')==1,screen
+            # Capture real UTF-8 output from the PTY without ASCII loss.
+            command="printf '\nUNICODE: ação ┌─┐ ←→ ∑ ⣿\n'\r"
+            t.tmux("send-keys","-t","foston:0.0","-H",*[f"{b:02x}" for b in command.encode()])
+            until=time.monotonic()+3
+            while time.monotonic()<until:
+                if "UNICODE: ação" in t.tmux("capture-pane","-p","-t","foston:0.0").decode():break
+                time.sleep(.05)
             line=t.update();fields=dict(item.split('=',1) for item in line[10:].split('|'))
-            assert 'ROUNDTRIP_OK' in base64.b64decode(fields['text']).decode()
+            assert 'ROUNDTRIP_OK' in base64.b64decode(fields['text']).decode("utf-16le")
+            assert 'UNICODE: ação ┌─┐ ←→ ∑ ⣿' in base64.b64decode(fields['text']).decode('utf-16le')
+            # Worst-sized full Unicode frame remains under the 4KB signed bus.
+            fake="\n".join("┼"*t.cols for _ in range(t.rows))+"\nMERO_CURSOR:0:0\n"
+            with patch.object(t,"tmux",return_value=fake.encode()):
+                worst=t.update();assert len(worst)<2700
+                feed.publish(["MERO:WX:"+"x"*1800,worst])
+                compact=dict(line.split("=",1) for line in (share/'live-terminal.txt').read_text().splitlines())
+                assert worst.encode() in base64.b64decode(compact['data'])
+                normal=dict(line.split("=",1) for line in (share/'live-state.txt').read_text().splitlines())
+                assert b'MERO:TERM:' not in base64.b64decode(normal['data'])
             for view in range(4):
                 assert t.action(dict(action='terminal-view',track=t.token,value=view))=='ok'
-                assert len(t.update())<1700
+                assert len(t.update())<3000
             assert t.action(dict(action='terminal-view',track=t.token,value=9))=='invalid_terminal_view'
         finally:
             t.close()
@@ -151,6 +173,7 @@ def check():
     selected+=source[source.index('static int KeyHeight('):source.index('static void Paint(')]
     with tempfile.TemporaryDirectory() as directory:
         root=Path(directory);(root/'terminal_native.inc').write_text(selected)
+        (root/'mero-terminal-font.h').write_bytes(Path('wince/terminal/mero-terminal-font.h').read_bytes())
         subprocess.run(['cc','-I',str(root),'scripts/check_terminal_native.c','-o',str(root/'check')],check=True)
         subprocess.run([str(root/'check')],check=True)
     import foston_keyboard as shortcut

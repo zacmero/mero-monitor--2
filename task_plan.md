@@ -179,3 +179,11 @@ Firmware mapping pass completed: live probe, private factory comparison and capa
 No boot writes, reboot tests, flashing, suspend or intentional fault injection.
 
 Passphrase off-disk preservation remains user action; no destructive recovery test was attempted.
+
+## Native Ambient resolution and terminal glyphs (2026-11-08)
+- [x] Find reduced image dimensions and ASCII-only loss in current pipeline.
+- [x] Add bounded native 480x272 photo decode/map/render with legacy input handling.
+- [x] Preserve terminal Unicode cells and add reproducible bitmap glyph coverage (Cascadia Nerd Font).
+- [x] Run codec/terminal safety tests, build and back up/deploy affected components.
+- [x] Verify actual screen behavior and document installed hashes; commit/push milestone.
+Keep boot/resident/firmware unchanged; preserve signed upgrade and rollback paths.

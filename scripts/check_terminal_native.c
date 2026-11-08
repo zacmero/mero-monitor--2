@@ -11,17 +11,25 @@ static DWORD GetTickCount(void){return now;}
 static int portrait=1,keyboard,physical,active=1,viewSent=1,requested=-1,shift,symbols,ctrl,scrolled;
 static int modeRequest=-1;static DWORD modeRequestTick;
 static int touchPressed,touchX,touchY,cols,rows,cx,cy;
-static char screenText[1100],status[96];
+static char screenText[2200],status[96];
 static char token[17]="0123456789abcdef",input[256],notice[96];
-static unsigned int inputLen;static DWORD received=1000,inputTick;
+static unsigned int inputLen,screenLength;static int screenUtf16;static DWORD received=1000,inputTick;
 static int allow=1,commands;static char action[32],track[100];static unsigned int value;
 static int MeroBusCommand(const char *a,const char *t,unsigned int v){if(!allow)return 0;commands++;strcpy(action,a);strcpy(track,t);value=v;return 1;}
 static int WideCharToMultiByte(int cp,int flags,const WCHAR *in,int n,char *out,int cap,void *a,void *b){(void)cp;(void)flags;(void)a;(void)b;assert(n==1&&cap>=1);out[0]=(char)*in;return 1;}
 static void MeroReturnToShell(void){}
 static void DestroyWindow(HWND h){(void)h;}
 #include "terminal_native.inc"
+#include "mero-terminal-font.h"
 static void frame(const char *s){char line[2048];strcpy(line,s);HostLine(line);}
 int main(void){
+    assert(MeroTerminalGlyph(0xe3)!=MeroTerminalGlyph('?'));
+    assert(MeroTerminalGlyph(0xe0b0)!=MeroTerminalGlyph(0x25a1));
+    assert(MeroTerminalGlyph(0xf07b)!=MeroTerminalGlyph(0x25a1));
+    assert(MeroTerminalGlyph(0xa13a)!=MeroTerminalGlyph(0x25a1));
+    assert(MeroTerminalGlyph(0x250c)!=MeroTerminalGlyph(0x25a1));
+    assert(MeroTerminalGlyph(0x28ff)!=MeroTerminalGlyph(0x25a1));
+    assert(MeroTerminalGlyph(0x1f642)==MeroTerminalGlyph(0x25a1));
     assert(!keyboard);
     frame("MERO:TERM:physical=1|input=");assert(physical&&!keyboard);
     frame("MERO:TERM:physical=0|input=");assert(!physical&&!keyboard);
@@ -32,6 +40,8 @@ int main(void){
     Touch(80,15,1);assert(keyboard);Touch(80,15,1);assert(!keyboard);
 
     ctrl=1;Character(' ');assert(inputLen==1&&input[0]==0&&!ctrl);Flush();assert(strstr(track,".00"));commands=0;
+    frame("MERO:TERM:encoding=u16|text=4QDnAAwlACUQJQ==");assert(screenUtf16&&screenLength==10);
+    frame("MERO:TERM:encoding=u16|text=YQ==");assert(screenLength==0);
     char output[8];assert(Decode("YWJj",output,sizeof(output))&&!strcmp(output,"abc"));
     assert(!Decode("!!!!",output,sizeof(output)));assert(!Decode("YWJjZGVmZ2hp",output,sizeof(output)));
     assert(Enqueue("abc\r",4));allow=0;Flush();assert(inputLen==4&&commands==0);

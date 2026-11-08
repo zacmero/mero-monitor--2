@@ -126,15 +126,15 @@ static void ReadPhoto(HDC dc) {
     if(!wanted[0]||strcmp(wanted,mero_ambient->sha)||!strcmp(wanted,painted)){ReleaseMutex(mero_bus_mutex);return;}
     if(!photoDC) {
         photoDC=CreateCompatibleDC(dc);memset(&info,0,sizeof(info));info.bmiHeader.biSize=sizeof(BITMAPINFOHEADER);
-        info.bmiHeader.biWidth=portrait?136:240;info.bmiHeader.biHeight=portrait?-240:-136;info.bmiHeader.biPlanes=1;info.bmiHeader.biBitCount=32;info.bmiHeader.biCompression=BI_RGB;
+        info.bmiHeader.biWidth=portrait?272:480;info.bmiHeader.biHeight=portrait?-480:-272;info.bmiHeader.biPlanes=1;info.bmiHeader.biBitCount=32;info.bmiHeader.biCompression=BI_RGB;
         photoBitmap=CreateDIBSection(dc,&info,DIB_RGB_COLORS,(void**)&photoBits,NULL,0);
         if(photoBitmap)oldPhoto=(HBITMAP)SelectObject(photoDC,photoBitmap);
     }
     if(photoBits) {
-        for(i=0;i<240*136;i++) {
+        for(i=0;i<480*272;i++) {
             unsigned short v=mero_ambient->pixels[i];
             unsigned int r=(v>>11)&31,g=(v>>5)&63,b=v&31;
-            photoBits[portrait?((i%240)*136+135-i/240):i]=((r*255/31)<<16)|((g*255/63)<<8)|(b*255/31);
+            photoBits[portrait?((i%480)*272+271-i/480):i]=((r*255/31)<<16)|((g*255/63)<<8)|(b*255/31);
         }
         strcpy(painted,wanted);
     }
@@ -150,7 +150,7 @@ static void Paint(HWND h) {
     if(photoDC&&painted[0]) {
         /* Slow local drift keeps stills alive without another transfer. */
         int drift=frameTick%48;if(drift>24)drift=48-drift;drift/=4;
-        StretchBlt(dc,-drift,-drift,width+12,height+8,photoDC,0,0,portrait?136:240,portrait?240:136,SRCCOPY);
+        StretchBlt(dc,-drift,-drift,width+12,height+8,photoDC,0,0,portrait?272:480,portrait?480:272,SRCCOPY);
     }
     if(menuVisible) {
         Fill(dc,0,0,width,36,RGB(10,20,24));
@@ -251,7 +251,7 @@ static LRESULT CALLBACK WindowProc(HWND h,UINT msg,WPARAM w,LPARAM l) {
     if(msg==WM_CLOSE){MeroReturnToShell();DestroyWindow(h);return 0;}
     if(msg==WM_DESTROY) {
         if(mero_ambient&&MeroBusLock()){memset(mero_ambient,0,sizeof(*mero_ambient));ReleaseMutex(mero_bus_mutex);}
-        if(photoBits)memset(photoBits,0,240*136*4);
+        if(photoBits)memset(photoBits,0,480*272*4);
         MeroAmbientClose();if(photoDC&&oldPhoto)SelectObject(photoDC,oldPhoto);
         if(photoBitmap)DeleteObject(photoBitmap);if(photoDC)DeleteDC(photoDC);
         MeroLiveClose(h);KillTimer(h,1);PostQuitMessage(0);return 0;

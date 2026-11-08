@@ -203,7 +203,10 @@ class BluetoothLive:
         rendered = [line() if callable(line) else line for line in lines]
         payload = ("\n".join(rendered) + "\n").encode("utf-8")
         if len(payload) >= 4096:
-            raise ValueError("telemetry too large")
+            # Keep the complete terminal in its dedicated compact feed. A
+            # symbol-heavy screen must not crowd weather/music out of the bus.
+            payload=("\n".join(line for line in rendered if not line.startswith("MERO:TERM:"))+"\n").encode("utf-8")
+            if len(payload)>=4096:raise ValueError("telemetry too large")
         codec=""
         try:
             capability=verified((self.share/"live-codec.txt").read_bytes(),self.key)

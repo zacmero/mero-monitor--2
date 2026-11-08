@@ -20,13 +20,14 @@ def clean(value, limit=70):
     return re.sub(r"[\r\n|=]", " ", str(value))[:limit]
 
 
-def frame_image(path, portrait=False):
+def frame_image(path, portrait=False, native=False):
     from PIL import Image, ImageOps
     with Image.open(path) as original:
         if original.width * original.height > 24000000:
             raise ValueError("image exceeds 24 megapixels")
         original = ImageOps.exif_transpose(original).convert("RGB")
-        size = (HEIGHT, WIDTH) if portrait else (WIDTH, HEIGHT)
+        width,height = (480,272) if native else (WIDTH,HEIGHT)
+        size = (height, width) if portrait else (width, height)
         image = ImageOps.fit(original, size, method=Image.Resampling.LANCZOS)
         return image.transpose(Image.Transpose.ROTATE_90) if portrait else image
 
@@ -40,11 +41,14 @@ def render(path):
 
 
 def render_jpeg(path, portrait=False):
-    output=io.BytesIO()
-    frame_image(path,portrait).save(output, format="JPEG", quality=84, optimize=True)
-    data=output.getvalue()
-    if len(data)>=65280: raise ValueError("compressed frame too large")
-    return data
+    image=frame_image(path,portrait,native=True)
+    # Keep the proven transfer ceiling even for detailed/noisy native frames.
+    for quality in (92,88,84,78,70,60,45,30):
+        output=io.BytesIO()
+        image.save(output, format="JPEG", quality=quality, optimize=True, subsampling=0 if quality>=84 else 2)
+        data=output.getvalue()
+        if len(data)<65280:return data
+    raise ValueError("compressed frame too large")
 
 
 class Ambient:

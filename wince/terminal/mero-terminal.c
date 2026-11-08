@@ -13,8 +13,9 @@ static int portrait=1,keyboard,physical,shift,symbols,ctrl,cols=32,rows=26,cx,cy
 static int viewSent=-1,requested=-1;
 static int modeRequest=-1;
 static DWORD modeRequestTick;
-static char token[17],screenText[1100],status[96]="Waiting for PC Bluetooth",input[256];
-static unsigned int inputLen;
+static char token[17],screenText[2200],status[96]="Waiting for PC Bluetooth",input[256];
+static unsigned int inputLen,screenLength;
+static int screenUtf16;
 static DWORD received;
 static DWORD inputTick;
 static int touchPressed,touchX,touchY;
@@ -26,7 +27,7 @@ static int Decode(const char *text,char *out,unsigned int cap) {
     while(*text){const char *p;if(*text=='=')break;p=strchr(alphabet,*text++);if(!p)return 0;
         bits=(bits<<6)|(unsigned int)(p-alphabet);have+=6;
         if(have>=8){have-=8;if(n+1>=cap)return 0;out[n++]=(char)((bits>>have)&255);}}
-    out[n]=0;return 1;
+    out[n]=0;return (int)n+1;
 }
 static int Enqueue(const char *bytes,unsigned int count) {
     if(!token[0]||(DWORD)(GetTickCount()-received)>15000){strcpy(notice,"Offline: input not sent");return 0;}
@@ -49,6 +50,7 @@ static void HostLine(char *line) {
         p=strstr(line,"portrait=");if(p)portrait=atoi(p+9)!=0;return;
     }
     if(strncmp(line,"MERO:TERM:",10))return;
+    screenUtf16=0;
     for(p=line+10;*p;p=end+1){
         end=strchr(p,'|');if(end)*end=0;
         if(!strncmp(p,"token=",6)&&strlen(p+6)==16){
@@ -64,7 +66,8 @@ static void HostLine(char *line) {
             if(next!=physical){physical=next;if(next)keyboard=0;viewSent=-1;}}
         else if(!strncmp(p,"input=",6)){if(p[6]&&strcmp(notice,p+6)&&!physical){modeRequest=-1;}strncpy(notice,p+6,sizeof(notice)-1);notice[sizeof(notice)-1]=0;}
         else if(!strncmp(p,"status=",7)){strncpy(status,p+7,sizeof(status)-1);status[sizeof(status)-1]=0;}
-        else if(!strncmp(p,"text=",5)&&!Decode(p+5,screenText,sizeof(screenText)))screenText[0]=0;
+        else if(!strncmp(p,"encoding=",9))screenUtf16=!strcmp(p+9,"u16");
+        else if(!strncmp(p,"text=",5)){int n=Decode(p+5,screenText,sizeof(screenText));screenLength=n?n-1:0;if(screenUtf16&&(screenLength&1))screenLength=0;}
         if(!end)break;
     }
     received=GetTickCount();
@@ -135,12 +138,12 @@ static void Paint(HWND h){
     Fill(dc,0,0,width,height,RGB(9,15,21));SetBkMode(dc,TRANSPARENT);SelectObject(dc,small);
     const char *labels[]={"SHELL",keyboard?"HIDE KB":"SHOW KB","SCROLL",active?"LIVE":"CONNECT",(modeRequest>=0?modeRequest:physical)?"PC OFF":"PC KEYS"};COLORREF accents[]={RGB(249,150,207),RGB(255,197,93),RGB(193,154,255),RGB(110,225,179),RGB(117,209,255)};
     for(x=0;x<5;x++){int left=x*width/5,right=(x+1)*width/5;Fill(dc,left,0,right-1,29,RGB(25,36,43));Label(dc,labels[x],left,8,right,28,accents[x],DT_CENTER);}
-    {char *p=screenText;row=0;while(*p&&row<rows&&row<26){
-        char ch=*p++;if(ch=='\n'){row++;col=0;continue;}
+    {unsigned int pos=0;row=0;while(pos<screenLength&&row<rows&&row<26){
+        unsigned int ch=(unsigned char)screenText[pos++];if(screenUtf16){if(pos>=screenLength)break;ch|=(unsigned int)(unsigned char)screenText[pos++]<<8;}if(ch=='\n'){row++;col=0;continue;}
         y=36+row*14;x=8+col*8;
         if(col<cols&&x+8<=width-4&&y+14<(keyboard?KeyTop():height-18)){
-            if(bits&&ch>=32&&ch<=126){int gx,gy;for(gy=0;gy<14;gy++)for(gx=0;gx<8;gx++)
-                if(mero_terminal_glyphs[(unsigned char)ch-32][gy]&(1<<(7-gx)))bits[(y+gy)*width+x+gx]=0x00b7e7b9;}
+            if(bits&&ch>=32){const unsigned char *glyph=MeroTerminalGlyph(ch);int gx,gy;for(gy=0;gy<14;gy++)for(gx=0;gx<8;gx++)
+                if(glyph[gy]&(1<<(7-gx)))bits[(y+gy)*width+x+gx]=0x00b7e7b9;}
         }col++;
     }}
     if(active&&!scrolled&&cx>=0&&cx<cols&&cy>=0&&cy<rows&&36+cy*14+14<(keyboard?KeyTop():height-18))

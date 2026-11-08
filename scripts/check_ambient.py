@@ -8,7 +8,7 @@ import tempfile
 import time
 from unittest.mock import patch
 from PIL import Image
-from companion_ambient import Ambient, render, frame_image, FRAME_BYTES
+from companion_ambient import Ambient, render, render_jpeg, frame_image, FRAME_BYTES
 from companion_live import BluetoothLive, signed, DEVICE
 
 root = Path(__file__).resolve().parents[1]
@@ -27,12 +27,17 @@ with tempfile.TemporaryDirectory() as directory:
     # not shrunk into a small foreground over a blurred background.
     assert render(base/"safe.png")==b"\0\x04"*(240*136)
     for portrait_mode in (False,True):
-        image=frame_image(base/"safe.png",portrait_mode)
-        assert image.size==(240,136)
+        image=frame_image(base/"safe.png",portrait_mode,native=True)
+        assert image.size==(480,272)
         assert set(image.getdata())=={(0,128,0)}
     wide=Image.new("RGB",(400,160),"green")
     wide.paste("red",(0,0,45,160));wide.paste("blue",(355,0,400,160));wide.save(base/"wide.png")
     assert set(frame_image(base/"wide.png",True).getdata())=={(0,128,0)}
+    noise=Image.effect_noise((480,272),100).convert("RGB");noise.save(base/"noise.png")
+    jpeg=render_jpeg(base/"noise.png")
+    assert len(jpeg)<65280
+    import io
+    assert Image.open(io.BytesIO(jpeg)).size==(480,272)
     share = base/"share";share.mkdir()
     config = base/"ambient.json"
     config.write_text(json.dumps(dict(folders=[dict(name=p.name,path=str(p)) for p in (red,blue,empty)],interval=20)))
@@ -86,12 +91,12 @@ shim=r'''
 #include <stdlib.h>
 #include "mero-photo-codec.h"
 typedef unsigned char BYTE;typedef unsigned int DWORD;
-#define MERO_AMBIENT_BYTES 65280
+#define MERO_AMBIENT_BYTES 261120
 #define INVALID_HANDLE_VALUE -1
-typedef struct {DWORD demandTick;char sha[65];unsigned short pixels[32640];} MeroAmbient;
+typedef struct {DWORD demandTick;char sha[65];unsigned short pixels[130560];} MeroAmbient;
 static MeroAmbient cache,*mero_ambient=&cache;
 static char xml[65536];static int open=1,locked,calls,closed,mero_bus_mutex;
-static unsigned int bytes=MERO_AMBIENT_BYTES;
+static unsigned int bytes=65280;
 static DWORD photoGetMs,photoDecodeMs,photoBytes;
 static void *FindWindowW(const wchar_t *a,void *b){(void)a;(void)b;return open?&cache:NULL;}
 static int MeroBusLock(void){assert(!locked);locked=1;return 1;}
@@ -102,8 +107,8 @@ static unsigned int GetTickCount(void){return 10000;}
 static int GetBody(const char *file,void *type,int handle,unsigned int *n){(void)type;(void)handle;assert(!locked);assert(!strncmp(file,"ambient-",8));calls++;*n=bytes;return 1;}
 static void ClosePeer(void){closed++;}
 BLOCK
-int main(void){AuthHash h;BYTE digest[32];char sha[65];memset(xml,21,MERO_AMBIENT_BYTES);
-AuthInit(&h);AuthUpdate(&h,xml,MERO_AMBIENT_BYTES);AuthFinal(&h,digest);AuthHex(digest,32,sha);
+int main(void){AuthHash h;BYTE digest[32];char sha[65];memset(xml,21,65280);
+AuthInit(&h);AuthUpdate(&h,xml,65280);AuthFinal(&h,digest);AuthHex(digest,32,sha);
 cache.demandTick=10000;AgentAmbient(sha);assert(calls==1&&!strcmp(cache.sha,sha)&&!locked);
 AgentAmbient(sha);assert(calls==1);cache.sha[0]=0;xml[0]++;AgentAmbient(sha);assert(!cache.sha[0]&&calls==2);
 xml[0]--;bytes--;AgentAmbient(sha);assert(!cache.sha[0]&&calls==3);
@@ -156,15 +161,17 @@ with tempfile.TemporaryDirectory() as directory:
 # Actual bundled JPEG decoder: valid frame, bad dimensions and truncated header.
 with tempfile.TemporaryDirectory() as directory:
     p=Path(directory)
-    Image.new("RGB",(240,136),"red").save(p/"ok.jpg")
+    Image.new("RGB",(480,272),"red").save(p/"ok.jpg")
     Image.new("RGB",(16,16),"red").save(p/"bad.jpg")
+    Image.new("RGB",(240,136),"blue").save(p/"legacy.jpg")
     (p/"codec.c").write_text(r'''#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include "mero-photo-codec.h"
-int main(int argc,char **argv){unsigned char data[65536];unsigned short out[32640];int n;FILE *f=fopen(argv[1],"rb");n=fread(data,1,sizeof(data),f);fclose(f);
-assert(MeroPhotoDecode(data,n,out));assert(out[0]==0xf800);assert(!MeroPhotoDecode(data,20,out));
-f=fopen(argv[2],"rb");n=fread(data,1,sizeof(data),f);fclose(f);assert(!MeroPhotoDecode(data,n,out));return 0;}''')
+int main(int argc,char **argv){unsigned char data[65536];unsigned short out[130560];int n;FILE *f=fopen(argv[1],"rb");n=fread(data,1,sizeof(data),f);fclose(f);
+assert(MeroPhotoDecode(data,n,out));assert(out[0]==0xf800&&out[130559]==0xf800);assert(!MeroPhotoDecode(data,20,out));
+f=fopen(argv[2],"rb");n=fread(data,1,sizeof(data),f);fclose(f);assert(!MeroPhotoDecode(data,n,out));
+f=fopen(argv[3],"rb");n=fread(data,1,sizeof(data),f);fclose(f);assert(MeroPhotoDecode(data,n,out)&&out[0]==0x001f&&out[130559]==0x001f);return 0;}''')
     subprocess.run(["cc","-I",str(root/"wince"),str(p/"codec.c"),"-o",str(p/"codec")],check=True)
-    subprocess.run([str(p/"codec"),str(p/"ok.jpg"),str(p/"bad.jpg")],check=True)
+    subprocess.run([str(p/"codec"),str(p/"ok.jpg"),str(p/"bad.jpg"),str(p/"legacy.jpg")],check=True)
 print("PASS: ambient rendering, folder races, source preservation, signed/expired/deduplicated controls, native frame hash/size/demand/close guards")
