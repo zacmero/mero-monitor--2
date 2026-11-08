@@ -248,3 +248,5 @@ Private durable evidence archive: `/home/zacmero/.local/state/mero/foston-eviden
 - Stopped terminal764. Protected agent upgrade through status771 verified1b857bc49f90f037b35976ba0a8b09a55636d2885abf3d69a58e55a578727010; backup BT/AgentUpdate/old-c105d08e76025a12.exe preserves095a52e7…. Matching terminal deployment in progress.
 
 - Matching terminal put772/get773 verified31744B SHAb3e2ad08…; backup772 preserves00da812c… hidden-board/shortcut app. Launch774 restored the terminal view. User asked to retry actual Ctrl+Space then lowercase d after the forwarding repair; confirmation pending.
+
+- User confirmed: "Yes, back at Bash" after the deployed Ctrl+Space correction. Fix44bf43d pushed; actual detach path now verified without stopping Herdr sessions.

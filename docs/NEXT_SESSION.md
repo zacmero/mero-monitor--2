@@ -6,7 +6,7 @@ User could not detach an accidentally opened Herdr client. Static Herdr config u
 - Touch CTRL+Space/@/2 emits00 through the existing signed terminal bus. Host tests exercise actual native NUL delivery/dedup, other-target whole-packet rejection and touch hex framing.
 - Protected agent upgrade through status771: SHA256 `1b857bc49f90f037b35976ba0a8b09a55636d2885abf3d69a58e55a578727010`; prior095a52e7… agent backup `\SDMMC\BT\AgentUpdate\old-c105d08e76025a12.exe`.
 - Terminal stopped764, put772/get773:31744B SHA256 `b3e2ad0879f44d992b0ec080aab5dbacdf8e0501cc9c0e8f1ce58abda60198e0`. Backup772 preserves00da812c… shortcut/hidden-board app. Launch774 returns to the persistent PC session. Verify the final job numbers in receipts if interrupted.
-- Full make/check and whitespace checks pass. No Herdr CLI session control or process termination was issued. User must retry the normal prefix once the updated app is visible; real detach confirmation remains pending. Super+Alt+Insert activates forwarding if off; release Ctrl+Space before lowercase d, then use Super+Alt+Insert to return keyboard control to the PC.
+- Full make/check and whitespace checks pass. Fix milestone44bf43d pushed. No Herdr CLI session control or process termination was issued. User confirmed the updated Ctrl+Space → lowercase d sequence returned to Bash. Super+Alt+Insert activates forwarding if off; release Ctrl+Space before lowercase d, then use Super+Alt+Insert to return keyboard control to the PC.
 
 ---
 
