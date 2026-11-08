@@ -7,20 +7,22 @@ The dedicated tmux server is `mero-foston`, session `foston`. It sources normal 
 ## Touch controls
 
 - **SHELL** returns home.
-- **KEYS** shows/hides the touch keyboard and resizes the PC terminal.
+- **SHOW KB / HIDE KB** explicitly shows/hides the touch keyboard and resizes the PC terminal.
 - **SCROLL** moves backward through up to1,000 lines of history. **LIVE** moves toward live output.
-- **PC KEYS** engages the physical keyboard, hides the on-device keyboard inside the existing bridge. It changes to **TOUCH**; tap it to release forwarding and restore the touch keyboard. No desktop window opens.
+- **PC KEYS** engages physical forwarding inside the existing bridge and hides the touch keyboard. It becomes **PC OFF**; tap it to release forwarding while leaving the touch keyboard hidden. No desktop window opens.
 - **SHIFT**, **SYM** and **CTRL** change the next keys. CTRL then C sends Ctrl+C. SYM switches punctuation and changes UP/DOWN to LEFT/RIGHT. Enter, Backspace, Escape and Tab have dedicated keys.
 
 Orientation follows the main shell's saved portrait/landscape setting. The keyboard reduces visible rows; hide it to read more output. Input queues are bounded; old unsent input expires after15 seconds. A disconnect does not automatically replay uncertain input. Check the visible PC prompt after an interrupted command.
 
 ## Physical PC keyboard
 
-Tap **PC KEYS** on the Foston. The existing bridge grabs the CASUE physical keyboard in the background and forwards it to the foreground supported custom app. No Hyprland window or additional desktop app opens. The touch keyboard disappears and the button becomes **TOUCH**. Tap TOUCH to release the PC keyboard and restore the on-screen keys.
+Press **Super+Alt+Insert** on the PC to bring the Foston terminal to the front and enable keyboard forwarding. The dedicated Bash session is started or reattached as needed. Release the shortcut keys; capture starts only after they are up and the device confirms the terminal is foreground. Press the same shortcut again while captured to release the keyboard locally. The shortcut is handled inside evdev capture as well as Hyprland, so release still works while Hyprland cannot see grabbed keys. No desktop window opens.
 
-The bridge uses the current Hyprland keyboard layout through the installed libxkbcommon. A lost input acknowledgement or device error releases forwarding instead of retrying uncertain commands. Ctrl+Alt+Escape provides an emergency release; shortcut customization is deferred. Physical keyboard access needs a one-time Linux device permission setup. Permanent setup: `sudo bash scripts/install_foston_keyboard_access.sh` once from this repository. It installs the validated70-mero-foston-keyboard.rules for exact USB vendor2a7a/product9005, keyboard interfaces only, and uses logind uaccess for the active seat user. This survives reboot/reconnect and requires no sudo during normal use. Existing rule versions are backed up before replacement.
+The touch keyboard starts hidden and remains hidden when PC mode ends or fails. Use **SHOW KB** only when needed, then **HIDE KB** to recover the full terminal view. **PC KEYS / PC OFF** remains available on the Foston. Manual PC mode can control the other supported apps below; shortcut mode targets the terminal specifically and releases capture if fresh foreground confirmation is lost.
 
-Terminal supports printable text, Enter, Tab, Ctrl+C and arrows. The PC input travels to the Foston and then through the same terminal path back to the PC session. A signed `queued` acknowledgement means the device accepted input into its message queue, not that the shell command finished. Input goes to supported custom apps only; vendor/system windows are rejected. Normal PC keyboard behavior resumes in touch mode. Mouse input remains local to the PC.
+The bridge uses the current Hyprland keyboard layout through the installed libxkbcommon. A lost input acknowledgement or device error releases forwarding instead of retrying uncertain commands. Ctrl+Alt+Escape remains an emergency release. Physical keyboard access needs a one-time Linux device permission setup. Permanent setup: `sudo bash scripts/install_foston_keyboard_access.sh` once from this repository. It installs the validated70-mero-foston-keyboard.rules for exact USB vendor2a7a/product9005, keyboard interfaces only, and uses logind uaccess for the active seat user. This survives reboot/reconnect and requires no sudo during normal use. Existing rule versions are backed up before replacement.
+
+Terminal supports printable text, Enter, Tab, Ctrl+C and arrows. The PC input travels to the Foston and then through the same terminal path back to the PC session. A signed `queued` acknowledgement means the device accepted input into its message queue, not that the shell command finished. Input goes to supported custom apps only; vendor/system windows are rejected. Normal PC keyboard behavior resumes when forwarding is off. Mouse input remains local to the PC.
 
 Other supported apps:
 
@@ -68,3 +70,9 @@ Transient signed input and codec messages now travel directly from RAM through t
 When the terminal is foreground, a negotiated `live-terminal.txt` snapshot carries terminal text, cinema state and orientation with the same signed ACK, keyboard, job and codec fields. The normal app feed remains available. Missing compact files or frames that stop advancing fall back to the generic feed, including older-host rollback. Weather/music presence flags are normally zero during compact terminal reception.
 
 The retained combination (RAM sender, compact snapshots, original terminal UI) received output in 928, 798 and 926 ms, with one output each and a successful first upload. UI timer/posted-flush experiments showed no measured improvement and were removed. These are small-sample input-to-received-frame observations, not final-paint timings or a frame-rate guarantee. See NEXT_SESSION for exact installed hashes, receipts and rollback references.
+
+## Shortcut installation
+
+ArchMerOS tracks the binding in the active `config/hypr/hyprland.lua` and legacy `config/hypr/hyprland.conf` and its windowless wrapper at `config/archmeros/scripts/archmeros-foston-terminal.sh`. The wrapper defaults to `$HOME/projects/mero-monitor-#2`; set `MERO_FOSTON_REPO` if the clone lives elsewhere. It calls `scripts/foston_keyboard.py toggle-terminal`. A failed or unresolved authenticated launch never arms capture or resets pending agent state. Existing permanent keyboard permissions are sufficient; no additional sudo step is needed.
+
+The bridge polls physical input and acknowledgements every approximately 25 ms, independently of display publication. New keyboard packets/mode changes request an immediate snapshot. Active-seat and lock checks target 100 ms intervals while capture is active; errors release the keyboard. Scheduling intervals are not a promised end-to-end latency.

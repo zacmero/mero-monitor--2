@@ -1,7 +1,7 @@
 """Background keyboard forwarding inside the existing bridge, with evdev grabs.
 
 Uses the installed libxkbcommon and current Hyprland layout. Devices are opened
-only while explicitly engaged from the Foston; no key log is retained.
+only while explicitly engaged from the Foston or its shortcut; no key log is retained.
 """
 import ctypes as C
 import ctypes.util
@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import struct
 import subprocess
+import time
 
 EVENT=struct.Struct('@llHHi')
 # Linux input.h: _IOW('E',0x90,int), _IOC(_IOC_READ,'E',0x18,96).
@@ -20,6 +21,10 @@ KEYS=(2<<30)|(96<<16)|(ord('E')<<8)|0x18
 SPECIAL={1:b'\x1b',14:b'\x7f',15:b'\t',28:b'\r',96:b'\r',
          102:b'\x1b[H',103:b'\x1b[A',104:b'\x1b[5~',105:b'\x1b[D',
          106:b'\x1b[C',107:b'\x1b[F',108:b'\x1b[B',109:b'\x1b[6~',111:b'\x1b[3~'}
+
+
+class KeysHeld(RuntimeError):
+    """Arming waits for shortcut keys to be released before grabbing."""
 
 
 class Layout:
@@ -55,6 +60,8 @@ class Layout:
         if value==1 and code in self.held:return b''
         if value==2 and code not in self.held:return b''
         if value==1:self.held.add(code);self.key(self.state,code+8,1)
+        if code==110 and self.held.intersection({125,126}) and self.held.intersection({56,100}):
+            raise RuntimeError('PC keyboard released')
         if code==1 and self.held.intersection({29,97}) and self.held.intersection({56,100}):
             raise RuntimeError('PC keyboard released')
         if code in SPECIAL:return SPECIAL[code]
@@ -69,7 +76,7 @@ class Layout:
 
 class Keyboard:
     def __init__(self):
-        self.fds=[];self.layout=None;self.queue=b'';self.session='';self.typing_fd=None
+        self.fds=[];self.layout=None;self.queue=b'';self.session='';self.typing_fd=None;self.next_seat_check=0
 
     def start(self):
         if self.fds:return
@@ -98,18 +105,19 @@ class Keyboard:
                 fd=os.open(path,os.O_RDONLY|os.O_NONBLOCK)
                 self.fds.append(fd)
                 held=bytearray(96);fcntl.ioctl(fd,KEYS,held,True)
-                if any(held):raise RuntimeError('Release held PC keys and tap PC KEYS')
+                if any(held):raise KeysHeld('Release shortcut keys to enable PC keyboard')
                 fcntl.ioctl(fd,GRAB,1)
         except Exception:
             self.close();raise
 
     def poll(self):
-        if self.fds:
+        if self.fds and time.monotonic()>=self.next_seat_check:
             result=subprocess.run(['loginctl','show-session',self.session,'-p','Active','-p','LockedHint'],
                                   capture_output=True,text=True,timeout=.5,check=True)
             state=dict(line.split('=',1) for line in result.stdout.splitlines())
             if state.get('Active')!='yes' or state.get('LockedHint')!='no':
                 raise RuntimeError('Desktop locked or inactive - PC keyboard released')
+            self.next_seat_check=time.monotonic()+0.1
         for fd in self.fds:
             while True:
                 try:data=os.read(fd,EVENT.size*64)
@@ -139,5 +147,5 @@ class Keyboard:
             try:fcntl.ioctl(fd,GRAB,0)
             except OSError:pass
             os.close(fd)
-        self.fds=[];self.queue=b'';self.typing_fd=None
+        self.fds=[];self.queue=b'';self.typing_fd=None;self.next_seat_check=0
         if self.layout:self.layout.close();self.layout=None

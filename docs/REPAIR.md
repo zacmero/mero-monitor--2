@@ -285,3 +285,11 @@ Final agent: protected upgrade through status713, SHA256 `095a52e746a8f0b21214bd
 Final terminal candidate: stop728/put729/get730, 32256 bytes, SHA256 `8b6328097055822b3ba907fbb4223b502699fa9c481ec3bfa132aaa9794f1d10`, backup729 preserves the intermediate timer-only app; backup721 preserves the pre-session app. It coalesces an input-message batch into one posted flush, keeping foreground and one-command guards. Final repeated measurements and compatibility evidence follow in NEXT_SESSION.
 
 The UI timer and eager/coalesced flush experiments did not improve measured latency and were not retained. Signed rollback745 restored the original terminal; get746 verified31744B SHA256 `18d00491984e3b6bd86fdfe07fde704691b65969c6def4adccd78dc910d77e60`. Source/tests match the pre-session terminal implementation. Only transport/compact-feed changes remain installed. Experimental backups are preserved.
+
+## Keyboard-first terminal shortcut
+
+Terminal put756/get757 verified31744B SHA256 `00da812c39768bf87468d97b4eeaf661daf146ab6b4c6d592a896a08f7c1691d`; previous app preserved as backup756. Launch758 and screenshot759/get760 verified full terminal/SHOW KB with touch keys hidden after physical mode exit. Agent remains095a52e7….
+
+Super+Alt+Insert is installed in active ArchMerOS Lua and legacy configs, with a windowless wrapper. Hyprland reload has no config errors and exposes exactly one Insert/modmask72 binding. Activation launches the named terminal through the signed agent, waits for released keys/fresh foreground confirmation, then captures. Captured evdev detects the same chord to release. Native PC OFF leaves touch keys hidden; SHOW KB/HIDE KB is manual. Existing keyboard permissions and emergency Ctrl+Alt+Escape remain.
+
+Fast25ms host polling modestly reduced sampled deliveryACK median572→451ms; sampled PC-published output median959→932ms shows no major end-to-end gain. These measurements do not end at device paint. Full checks pass; actual physical shortcut feedback is pending. No boot, firmware, USB, key or agent changes.

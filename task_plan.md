@@ -151,3 +151,12 @@ User ended work for sleep. Preserve the open latency issue and resume from the t
 - [x] Reject UI scheduling experiments: no proven benefit. Restore original terminal via signed rollback745/get746. Retained combination measured928/798/926ms with one output each.
 - [x] Verify generic-feed return and Music capture, record evidence; transport commit2486955 pushed.
 - [x] Save final handoff/verification and private evidence; optional human typing feedback requested.
+
+## Keyboard-first terminal shortcut
+- [x] Trace evdev grab, Hyprland bindings, keyboard ownership and native mode transitions.
+- [x] Add persistent Super+Alt+Insert activation and grabbed-keyboard release; wait for shortcut release before capture.
+- [x] Hide touch keyboard by default/on PC exit; explicit SHOW KB/HIDE KB control.
+- [x] Poll physical input/ACK independently of display refresh while preserving lock/seat/error release.
+- [x] Test/build/backed-up deployment; active Hyprland binding and device UI verified.
+- [ ] Optional human test of the physical shortcut in both directions.
+- [x] Update installation/handoff and prepare verified milestones in both repositories; push verification follows.

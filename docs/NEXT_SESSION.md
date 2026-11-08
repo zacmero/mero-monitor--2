@@ -1,3 +1,21 @@
+# Current checkpoint: keyboard-first terminal (2026-11-07)
+
+**Start here.** Super+Alt+Insert is configured to open the Foston terminal and toggle PC keyboard forwarding. The same chord releases forwarding inside evdev capture, since Hyprland cannot see grabbed keys. Touch keys start hidden and remain hidden on PC-mode exit/error; SHOW KB / HIDE KB is explicit. No host window or extra daemon was added.
+
+- Terminal stop755 / put756 / get757 / launch758: 31744 bytes, SHA256 `00da812c39768bf87468d97b4eeaf661daf146ab6b4c6d592a896a08f7c1691d`. **Backup756 restores the prior verified18d00491… terminal.** Agent remains095a52e7…; no agent/firmware/boot changes in this milestone.
+- Screenshot759/get760 visually confirms SHOW KB, PC KEYS and full terminal view with touch keys hidden after PC mode exit. CaptureSHA `616ce0a4555004b1dd8ab6b84cc94cf68617043e6540ae3cd8563b42756e4a54`.
+- Host shortcut client uses the existing mode0600 socket, launches only `mero-pc-terminal.exe` through the signed agent, then arms capture. It waits for the shortcut keys to be released and fresh signed foreground-terminal presence. Offline/failed/unknown launch never grabs or resets pending jobs. A nonblocking local lock suppresses overlapping launcher processes. Arming can be cancelled or times out after10s.
+- Shortcut mode targets `MERO_TERMINAL` explicitly, preserving per-packet device foreground checks. Capture releases on lost fresh foreground confirmation, seat/lock/input errors, timeout, PC OFF, Super+Alt+Insert or Ctrl+Alt+Escape. Existing manual PC KEYS mode retains supported-app forwarding. Durable keyboard journals/deduplication remain unchanged.
+- Bridge polls input/ACKs on its existing25ms loop and requests publication immediately when pending input/mode changes. Seat/lock verification targets100ms while capturing. Foreground/device presence uses the existing8s authenticated capability lease; no tighter3–4s cutoff that could fight the3s refresh cadence.
+- Diagnostic PC-input→PC-published-output samples, **not final device paint**: baseline959/1057/889ms (median959), new834/944/932ms (median932). No major total-output improvement established. Device deliveryACK median572→451ms (baseline486/575/572; new351/470/451). Small samples and different endpoint from the earlier CE input→received-frame probe.
+- Initial benchmark sample appended to pending 'ok' prompt text and failed as a shell command; discarded. The harness now checks for an empty prompt before every harmless marker command. Do not inject commands blindly into a user's unfinished command or running program.
+- Current Hyprland runs `-c ~/.config/hypr/hyprland.lua`, symlinked to ArchMerOS/config/hypr/hyprland.lua. Binding exists in Lua **and** legacy.conf. Active reload/configerrors passed; exactly one Insert/modmask72 binding present. Super+Insert/modmask64 remains the PC on-screen keyboard shortcut.
+- Wrapper: ArchMerOS/config/archmeros/scripts/archmeros-foston-terminal.sh, executable through the active config symlink. Defaults to `$HOME/projects/mero-monitor-#2`, overridable via `MERO_FOSTON_REPO`; invokes `scripts/foston_keyboard.py toggle-terminal`. Existing permanent keyboard udev setup is sufficient, no new sudo step.
+- Private benchmark/UI evidence: `/home/zacmero/.local/state/mero/foston-evidence/keyboard-shortcut-20261107-221441` (JSON timing samples, screenshot and SHA256 manifest).
+- Full make/check, native hidden-board parsing/control tests, held-key arming/timeout/foreground tests, actual Layout release-chord test, local client no-window/launch-failure tests and Bash/config validation passed. Human physical shortcut test requested; **do not claim a real two-way keypress test until user confirms**. Terminal left open, forwarding off at last observation.
+
+---
+
 # Latest checkpoint: terminal transport latency repaired (2026-11-07)
 
 **Start here.** The final retained change is commit `2486955` (pushed): transient signed input/codec messages send directly from RAM, and the foreground terminal uses a smaller signed snapshot. UI timer/posted-flush experiments were rejected and the original terminal was restored.

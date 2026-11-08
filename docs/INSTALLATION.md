@@ -48,10 +48,16 @@ Use the current event node in the last two commands. Confirm `uaccess` in tags a
 
 ## Using and verifying Mero Terminal
 
-Open **01 – COMPANION LABS → Mero Terminal**. It starts a dedicated persistent tmux/Bash session and compact ArchMerOS fastfetch. Tap **PC KEYS**: the digital keyboard disappears and the physical keyboard goes to the foreground supported Foston app. No desktop app opens. Tap **TOUCH**: normal PC input returns and the digital keyboard reappears. The mouse remains local to the PC. The bridge releases keyboard grabs on errors, lost input acknowledgements, desktop lock/inactivity or process exit; Ctrl+Alt+Escape is an emergency release.
+Open **01 – COMPANION LABS → Mero Terminal**. It starts a dedicated persistent tmux/Bash session and compact ArchMerOS fastfetch. Tap **PC KEYS**: the digital keyboard disappears and the physical keyboard goes to the foreground supported Foston app. No desktop app opens. Tap **PC OFF**: normal PC input returns and the digital keyboard stays hidden. Use **SHOW KB / HIDE KB** explicitly when needed. The mouse remains local to the PC. The bridge releases keyboard grabs on errors, lost input acknowledgements, desktop lock/inactivity or process exit; Ctrl+Alt+Escape is an emergency release.
 
 Verify touch typing with a harmless command, then PC typing and mode release. Check that the same tmux pane survives a bridge restart. Do not infer rendering success only from a successful process launch; use the screen capture helper and user confirmation. Actual physical key generation and power cycles still need human interaction.
 
 Detailed controls and current limits: [MERO_TERMINAL.md](MERO_TERMINAL.md). New stable startup ID17 leaves older saved defaults unchanged. Keyboard input uses the active Hyprland layout via libxkbcommon; output uses a bounded ASCII grid. This is a Bluetooth-polled terminal, not a video-rate desktop mirror.
 
 On mero-machine, this permanent rule was installed and user-confirmed on2026-11-07. Agent inspection verified the installed rule, uaccess tags and user ACLs on both CASUE interfaces. Installation on another machine must repeat this one-time setup for that machine's keyboard and seat.
+
+## Foston terminal shortcut (ArchMerOS)
+
+The tracked ArchMerOS Hyprland Lua and legacy configs bind **Super+Alt+Insert** to `~/.config/archmeros/scripts/archmeros-foston-terminal.sh`. Keep the ArchMerOS scripts symlink and the Foston repository clone installed. The wrapper defaults to `$HOME/projects/mero-monitor-#2`; override `MERO_FOSTON_REPO` for another location, then reload Hyprland. Existing one-time keyboard udev permissions cover this feature; normal use needs no sudo.
+
+Activation uses the signed agent to open the named terminal app, waits for fresh device foreground confirmation and all shortcut keys to be released, then grabs the selected keyboard. The same chord releases it inside the capture path, which is necessary because Hyprland cannot see grabbed keys. Ctrl+Alt+Escape also releases it. PC OFF on the device returns keyboard control; SHOW KB / HIDE KB controls its otherwise-hidden touch keyboard. No host terminal/forwarding window is opened.

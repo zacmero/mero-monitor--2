@@ -210,6 +210,10 @@ class BluetoothLive:
             if capability.get('offer')==self.codec_offer and capability.get('codec')=='zlib1' and -3<=time.time()-int(capability['epoch'])<=8:
                 if getattr(self,'terminal',None) is not None and capability.get('terminal') in ('0','1'):
                     self.terminal.demand_until=time.monotonic()+6 if capability.get('terminal')=='1' else 0
+                    age=max(0,time.time()-int(capability['epoch']))
+                    lease=time.monotonic()+max(0,8-age)
+                    self.terminal.device_until=lease
+                    self.terminal.foreground_until=lease if capability['terminal']=='1' else 0
                 packed=zlib.compress(payload,1)
                 if len(packed)<len(payload):payload=packed;codec='zlib1'
         except (OSError,ValueError,KeyError):pass

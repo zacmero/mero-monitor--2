@@ -14,7 +14,7 @@ import subprocess
 import time
 
 from companion_live import atomic, verified
-from companion_keyboard import Keyboard
+from companion_keyboard import Keyboard, KeysHeld
 
 TARGETS = {"terminal": "MERO_TERMINAL", "shell": "MeroShellWndClass",
            "ambient": "MERO_AMBIENT", "backlight": "MERO_BACKLIGHT",
@@ -49,6 +49,11 @@ class Terminal:
         self.cols, self.rows, self.scroll = 32, 26, 0
         self.active = False
         self.physical = False
+        self.arming_until = 0
+        self.next_arm = 0
+        self.device_until = 0
+        self.foreground_until = 0
+        self.keyboard_target = 'MERO_FOREGROUND'
         self.keyboard_owner = ""
         self.keyboard_deadline = 0
         self.capture=Keyboard()
@@ -122,6 +127,7 @@ class Terminal:
         if action == "terminal-ping":
             return "ok"
         if action == "terminal-keyboard":
+            self.arming_until=0;self.keyboard_target='MERO_FOREGROUND'
             try:self.capture.start()
             except (OSError,RuntimeError,ValueError,subprocess.SubprocessError) as error:
                 self.capture.close();self.physical=False
@@ -131,6 +137,7 @@ class Terminal:
             self.keyboard_deadline = time.monotonic()+15
             return "ok"
         if action == "terminal-touch":
+            self.arming_until=0
             self.capture.close()
             self.keyboard_notice=""
             self.physical = False
@@ -233,6 +240,25 @@ class Terminal:
                 return
             request = json.loads(self.client_data)
             mode = request.get("mode")
+            if mode in ("keyboard-state", "toggle-terminal"):
+                if not re.fullmatch(r"[0-9a-f]{16}",request.get("owner", "")):
+                    raise ValueError("invalid keyboard owner")
+                if mode == "keyboard-state":
+                    self.finish_client("physical" if self.physical else "arming" if self.arming_until else "touch" if self.device_until>now else "offline")
+                elif self.physical or self.arming_until:
+                    self.capture.close();self.physical=False;self.arming_until=0;self.keyboard_notice="";self.keyboard_owner=""
+                    self.finish_client("touch")
+                elif self.device_until<=now:
+                    self.finish_client("device_offline")
+                else:
+                    try:self.start()
+                    except (OSError,RuntimeError,ValueError,subprocess.SubprocessError):
+                        self.keyboard_notice="Terminal session unavailable"
+                        self.finish_client("terminal_unavailable");return
+                    self.arming_until=now+10;self.next_arm=0;self.keyboard_target=TARGETS['terminal']
+                    self.keyboard_notice="Release shortcut keys / waiting for terminal"
+                    self.finish_client("arming")
+                return
             if mode in ("engage", "release", "status"):
                 owner = request.get("owner", "")
                 if not re.fullmatch(r"[0-9a-f]{16}",owner):
@@ -241,6 +267,7 @@ class Terminal:
                     self.physical, self.keyboard_owner = True, owner
                 matched = self.physical and owner == self.keyboard_owner
                 if mode == "release" and matched:
+                    self.capture.close();self.arming_until=0
                     self.physical, self.keyboard_owner = False, ""
                     matched = False
                 if matched:
@@ -262,12 +289,27 @@ class Terminal:
 
     def keyboard_field(self):
         self.poll_keyboard()
+        if self.arming_until:
+            now=time.monotonic()
+            if now>=self.arming_until:
+                self.arming_until=0;self.keyboard_notice="Keyboard activation timed out"
+            elif self.active and self.foreground_until>now and now>=self.next_arm:
+                self.next_arm=now+0.15
+                try:
+                    self.capture.start();self.arming_until=0;self.physical=True
+                    self.keyboard_notice="";self.keyboard_deadline=now+15
+                except KeysHeld:
+                    pass
+                except (OSError,RuntimeError,ValueError,subprocess.SubprocessError) as error:
+                    self.capture.close();self.arming_until=0;self.physical=False;self.keyboard_notice=str(error)[:70]
         if self.capture.fds:
             try:
+                if self.keyboard_target==TARGETS['terminal'] and self.foreground_until<=time.monotonic():
+                    raise RuntimeError("Foston terminal not in front - PC keyboard released")
                 self.capture.poll()
                 self.keyboard_deadline=time.monotonic()+15
                 if not self.pending and self.capture.queue:
-                    self.pending=dict(id=secrets.token_hex(8),target='MERO_FOREGROUND',data=self.capture.packet().hex())
+                    self.pending=dict(id=secrets.token_hex(8),target=self.keyboard_target,data=self.capture.packet().hex())
                     self.client_deadline=time.monotonic()+12
             except (OSError,RuntimeError,ValueError,subprocess.SubprocessError) as error:
                 self.keyboard_notice=str(error)[:70];self.capture.close();self.physical=False

@@ -552,6 +552,7 @@ def main():
     media = None
     art = ""
     music = music_line(None)
+    previous_input_state = None
     try:
         while True:
             now = time.monotonic()
@@ -564,6 +565,12 @@ def main():
                 next_fetch = now + (WEATHER_INTERVAL if latest_weather_line and time.time() - last_weather_fetch < WEATHER_INTERVAL else 60)
             if future is None and now >= next_fetch:
                 future = executor.submit(fetch_weather)
+            # Poll capture/ACKs independently of the slower display publication.
+            keyboard = terminal.keyboard_field()
+            input_state = (keyboard, terminal.physical, bool(terminal.arming_until), terminal.keyboard_notice)
+            if input_state != previous_input_state:
+                next_live = 0.0
+                previous_input_state = input_state
             power = f"MERO:POWER:standby={int(cinema_active())}"
             weather = ""
             if latest_weather_line:
@@ -589,7 +596,7 @@ def main():
                     ambient_line = ambient.update()
                     bluetooth.publish([power, music, ambient_line, terminal.update] + ([weather] if weather else []), art=art,
                                       art_track=media["track"] if media and art else "", ambient=ambient.sha,
-                                      keyboard=terminal.keyboard_field())
+                                      keyboard=keyboard)
                 except (OSError, ValueError) as error:
                     print(f"[!] Bluetooth live feed: {error}")
                 next_live = time.monotonic() + (0.15 if terminal.demand_until > time.monotonic() else 1)

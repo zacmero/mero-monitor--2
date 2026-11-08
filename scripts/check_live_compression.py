@@ -53,7 +53,9 @@ int decode(const char *data,const char *codec,char *out,unsigned int cap){return
     capability();raw=(share/'live-codec.txt').read_bytes();(share/'live-codec.txt').write_bytes(raw.replace(b'zlib1',b'zlib2'));assert publish()['codec']==''
     live.terminal=SimpleNamespace(demand_until=0)
     capability(terminal='1');publish();assert live.terminal.demand_until>time.monotonic()
+    assert live.terminal.device_until>time.monotonic() and live.terminal.foreground_until>time.monotonic()
     capability(terminal='0');publish();assert live.terminal.demand_until==0
+    assert live.terminal.device_until>time.monotonic() and live.terminal.foreground_until==0
     (share/'agent-job.txt').write_bytes(signed(dict(v=1,device=DEVICE,seq=123,op='status'),key))
     assert publish()['job_seq']=='123'
     (share/'agent-job.txt').write_bytes(signed(dict(v=1,device=DEVICE,seq=0,op='idle'),key))

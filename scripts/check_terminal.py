@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 import companion_live as live
 from companion_terminal import Terminal, TARGETS
-from companion_keyboard import Layout,Keyboard,EVENT
+from companion_keyboard import Layout,Keyboard,EVENT,KeysHeld
 
 
 def check():
@@ -22,7 +22,11 @@ def check():
         assert layout.event(30,1)==b'a';assert layout.event(30,1)==b'';assert layout.event(30,2)==b'a';layout.event(30,0)
         layout.event(42,1);assert layout.event(30,1)==b'A';layout.event(30,0);layout.event(42,0)
         layout.event(29,1);assert layout.event(46,1)==b'\x03';layout.event(46,0);layout.event(29,0)
-        assert layout.event(103,1)==b'\x1b[A'
+        assert layout.event(103,1)==b'\x1b[A';layout.event(103,0)
+        layout.event(125,1);layout.event(56,1)
+        try:layout.event(110,1)
+        except RuntimeError as error:assert str(error)=='PC keyboard released'
+        else:raise AssertionError('grabbed Super+Alt+Insert did not release')
     finally:layout.close()
     mirrored=Keyboard();mirrored.fds=[100,101];mirrored.session='test';mirrored.layout=Layout('us')
     events=EVENT.pack(0,0,1,30,1)+EVENT.pack(0,1,1,30,1)+EVENT.pack(0,2,1,30,0)
@@ -34,6 +38,12 @@ def check():
         with patch('companion_keyboard.os.read',side_effect=read),patch('companion_keyboard.subprocess.run',return_value=SimpleNamespace(stdout='Active=yes\nLockedHint=no\n')):
             mirrored.poll()
         assert mirrored.queue==b'a' and mirrored.typing_fd==100
+        # Fast input polling must keep checking lock/seat state on its own cadence.
+        with patch('companion_keyboard.time.monotonic',return_value=mirrored.next_seat_check+.001),patch('companion_keyboard.subprocess.run',return_value=SimpleNamespace(stdout='Active=yes\nLockedHint=yes\n')):
+            try:mirrored.poll()
+            except RuntimeError as error:assert 'locked' in str(error)
+            else:raise AssertionError('locked desktop kept capture active')
+
     finally:mirrored.fds=[];mirrored.layout.close()
     keyboard=Keyboard();keyboard.queue=b'x'*31+b'\xc3\xa1';assert keyboard.packet()==b'x'*31 and keyboard.packet()==b'\xc3\xa1'
     key=bytes(range(32))
@@ -100,17 +110,67 @@ def check():
             assert mode('status')=='physical'
             assert t.action(dict(action='terminal-touch',track=t.token,value=0))=='ok'
             assert mode('status')=='touch' and not t.physical
+            assert mode('keyboard-state')=='offline'
+            t.device_until=time.monotonic()+8
+            assert mode('keyboard-state')=='touch'
+            t.foreground_until=0;t.active=False
+            assert mode('toggle-terminal')=='arming' and not t.physical and t.active
+            with patch.object(t.capture,'start') as start:
+                t.keyboard_field();start.assert_not_called()
+            t.foreground_until=time.monotonic()+4;t.active=True;t.next_arm=0
+            with patch.object(t.capture,'start',side_effect=KeysHeld('held')):
+                t.keyboard_field();assert t.arming_until and not t.physical
+            t.next_arm=0
+            with patch.object(t.capture,'start'):
+                t.keyboard_field();assert not t.arming_until and t.physical
+            assert t.keyboard_target==TARGETS['terminal']
+            assert mode('keyboard-state')=='physical'
+            assert mode('toggle-terminal')=='touch' and not t.physical
+            assert mode('toggle-terminal')=='arming'
+            assert mode('toggle-terminal')=='touch' and not t.arming_until
+            t.active=False
+            with patch.object(t,'start',side_effect=subprocess.CalledProcessError(1,['tmux'])):
+                assert mode('toggle-terminal')=='terminal_unavailable' and not t.arming_until and not t.physical
+            t.active=True
+
+            t.arming_until=time.monotonic()-1;t.keyboard_field();assert not t.arming_until and 'timed out' in t.keyboard_notice
+            original_capture=t.capture
+            t.capture=SimpleNamespace(fds=[123],close=lambda:setattr(t.capture,'fds',[]),poll=lambda:None)
+            t.physical=True;t.keyboard_target=TARGETS['terminal'];t.foreground_until=0
+            t.keyboard_field();assert not t.physical and not t.capture.fds and 'not in front' in t.keyboard_notice
+            t.capture=original_capture
+
+
         finally:client.close();t.close()
     subprocess.run(['cc','scripts/check_keyboard.c','-o','/tmp/mero-check-keyboard'],check=True)
     subprocess.run(['/tmp/mero-check-keyboard'],check=True)
     source=Path('wince/terminal/mero-terminal.c').read_text()
-    selected=source[source.index('static const char *letters'):source.index('static void HostLine(')]
+    selected=source[source.index('static const char *letters'):source.index('static void Flush(')]
     selected+=source[source.index('static void Flush('):source.index('static HFONT Font(')]
     selected+=source[source.index('static int KeyHeight('):source.index('static void Paint(')]
     with tempfile.TemporaryDirectory() as directory:
         root=Path(directory);(root/'terminal_native.inc').write_text(selected)
         subprocess.run(['cc','-I',str(root),'scripts/check_terminal_native.c','-o',str(root/'check')],check=True)
         subprocess.run([str(root/'check')],check=True)
+    import foston_keyboard as shortcut
+    with tempfile.TemporaryDirectory() as directory:
+        endpoint=Path(directory)/'socket'
+        with patch.object(shortcut,'control',side_effect=['physical','touch']) as control,patch('subprocess.run') as run:
+            assert shortcut.toggle_terminal(endpoint)=='touch';run.assert_not_called()
+        with patch.object(shortcut,'control',side_effect=['touch','arming']) as control,patch('subprocess.run',return_value=SimpleNamespace(returncode=0)) as run:
+            assert shortcut.toggle_terminal(endpoint)=='arming'
+            assert run.call_args[0][0][-2:]==['launch','mero-pc-terminal.exe']
+            assert control.call_args_list[-1].args[0]=='toggle-terminal'
+        with patch.object(shortcut,'control',return_value='touch') as control,patch('subprocess.run',return_value=SimpleNamespace(returncode=1)):
+            try:shortcut.toggle_terminal(endpoint)
+            except RuntimeError:pass
+            else:raise AssertionError('failed launch armed keyboard')
+            assert control.call_count==1
+        with patch.object(shortcut,'control',return_value='offline'),patch('subprocess.run') as run:
+            try:shortcut.toggle_terminal(endpoint)
+            except RuntimeError:pass
+            else:raise AssertionError('offline launch attempted')
+            run.assert_not_called()
     print('PASS: real tmux greeting/input, signed terminal routing/dedup, bounded views and PC keyboard acknowledgement')
 
 

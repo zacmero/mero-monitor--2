@@ -231,3 +231,11 @@ Benchmark audit: initial immediate-injection timing results were confounded by t
 - Music screenshot752/get753 matched the previously inspected native-width sharp cover exactly (SHA9a7e142e…), confirming generic app output after compact-terminal testing. Returning to Terminal for optional hands-on input feedback; no further injected commands are planned.
 
 Private durable evidence archive: `/home/zacmero/.local/state/mero/foston-evidence/terminal-latency-20261107-214834` (timing reports, Music capture and SHA256 manifest; no keys or keyed executables).
+
+### Keyboard-first terminal deployment
+- New terminal stop755/put756/get757/launch758:31744B SHA25600da812c39768bf87468d97b4eeaf661daf146ab6b4c6d592a896a08f7c1691d; backup756 preserves original18d00491… app. Native host-line/control tests cover hidden default, physical on/off/error and explicit touch-show behavior. Screenshot759/get760 visually confirms SHOW KB and full terminal view with no touch board after PC mode exit.
+- Updated bridge runs fast25ms keyboard/ACK polling and immediate publication on pending/mode changes. Clean-prompt diagnostic after: published output834/944/932ms (median932) vs baseline959/1057/889 (median959); no material overall-output gain claimed. Device delivery ACK351/470/451ms (median451) vs486/575/572 (median572). These end at PC-published output, not device display.
+- Actual session is Hyprland -c ~/.config/hypr/hyprland.lua, not the legacy.conf. Binding added to both tracked configs; active reload reports no config errors and exactly one Insert modmask72 binding. Existing Super+Insert modmask64 preserved. Executable wrapper resolves through ArchMerOS scripts symlink.
+- Real Super+Alt+Insert activation/release test requested from user. No automatic real-keyboard grab was injected by the agent.
+
+- Private keyboard timing/UI evidence archived at `/home/zacmero/.local/state/mero/foston-evidence/keyboard-shortcut-20261107-221441` with SHA256 manifest. Full make/check and both repository whitespace checks pass; actual shortcut feedback remains pending.

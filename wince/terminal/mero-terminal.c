@@ -60,8 +60,8 @@ static void HostLine(char *line) {
         else if(!strncmp(p,"active=",7))active=atoi(p+7);
         else if(!strncmp(p,"physical=",9)){int next=atoi(p+9)!=0;
             if(modeRequest==next)modeRequest=-1;
-            if(next!=physical){physical=next;if(modeRequest<0)keyboard=!next;viewSent=-1;}}
-        else if(!strncmp(p,"input=",6)){if(p[6]&&strcmp(notice,p+6)&&!physical){keyboard=1;modeRequest=-1;}strncpy(notice,p+6,sizeof(notice)-1);notice[sizeof(notice)-1]=0;}
+            if(next!=physical){physical=next;if(next)keyboard=0;viewSent=-1;}}
+        else if(!strncmp(p,"input=",6)){if(p[6]&&strcmp(notice,p+6)&&!physical){modeRequest=-1;}strncpy(notice,p+6,sizeof(notice)-1);notice[sizeof(notice)-1]=0;}
         else if(!strncmp(p,"status=",7)){strncpy(status,p+7,sizeof(status)-1);status[sizeof(status)-1]=0;}
         else if(!strncmp(p,"text=",5)&&!Decode(p+5,screenText,sizeof(screenText)))screenText[0]=0;
         if(!end)break;
@@ -70,7 +70,7 @@ static void HostLine(char *line) {
 }
 static void Flush(void) {
     unsigned int i,n;char track[100];int view=portrait|(keyboard?2:0);
-    if(modeRequest>=0&&(DWORD)(GetTickCount()-modeRequestTick)>15000){modeRequest=-1;keyboard=!physical;}
+    if(modeRequest>=0&&(DWORD)(GetTickCount()-modeRequestTick)>15000){modeRequest=-1;keyboard=0;}
     if(inputLen&&(DWORD)(GetTickCount()-inputTick)>15000){inputLen=0;strcpy(notice,"Old input cleared: check PC prompt");}
     if(!token[0]||(DWORD)(GetTickCount()-received)>15000)return;
     if(requested>=3){if(MeroBusCommand(requested==3?"terminal-keyboard":"terminal-touch",token,0))requested=-1;return;}
@@ -111,7 +111,7 @@ static void Touch(int x,int y,HWND h){
         if(key==1){if((modeRequest>=0?modeRequest:physical)){requested=4;modeRequest=0;modeRequestTick=GetTickCount();keyboard=1;}else keyboard=!keyboard;}
         if(key==2)requested=1;
         if(key==3){if(!active)viewSent=-1;else requested=scrolled?2:0;}
-        if(key==4){int previous=modeRequest>=0?modeRequest:physical;modeRequest=!previous;modeRequestTick=GetTickCount();requested=previous?4:3;keyboard=previous?1:0;}
+        if(key==4){int previous=modeRequest>=0?modeRequest:physical;modeRequest=!previous;modeRequestTick=GetTickCount();requested=previous?4:3;keyboard=0;}
         return;
     }
     if(!keyboard||y<KeyTop()||y>=KeyTop()+6*KeyHeight())return;
@@ -132,7 +132,7 @@ static void Paint(HWND h){
     memset(&bi,0,sizeof(bi));bi.bmiHeader.biSize=sizeof(BITMAPINFOHEADER);bi.bmiHeader.biWidth=width;bi.bmiHeader.biHeight=-height;bi.bmiHeader.biPlanes=1;bi.bmiHeader.biBitCount=32;
     HBITMAP bitmap=CreateDIBSection(screen,&bi,DIB_RGB_COLORS,(void**)&bits,NULL,0),old=(HBITMAP)SelectObject(dc,bitmap);
     Fill(dc,0,0,width,height,RGB(9,15,21));SetBkMode(dc,TRANSPARENT);SelectObject(dc,small);
-    const char *labels[]={"SHELL","KEYS","SCROLL",active?"LIVE":"CONNECT",(modeRequest>=0?modeRequest:physical)?"TOUCH":"PC KEYS"};COLORREF accents[]={RGB(249,150,207),RGB(255,197,93),RGB(193,154,255),RGB(110,225,179),RGB(117,209,255)};
+    const char *labels[]={"SHELL",keyboard?"HIDE KB":"SHOW KB","SCROLL",active?"LIVE":"CONNECT",(modeRequest>=0?modeRequest:physical)?"PC OFF":"PC KEYS"};COLORREF accents[]={RGB(249,150,207),RGB(255,197,93),RGB(193,154,255),RGB(110,225,179),RGB(117,209,255)};
     for(x=0;x<5;x++){int left=x*width/5,right=(x+1)*width/5;Fill(dc,left,0,right-1,29,RGB(25,36,43));Label(dc,labels[x],left,8,right,28,accents[x],DT_CENTER);}
     {char *p=screenText;row=0;while(*p&&row<rows&&row<26){
         char ch=*p++;if(ch=='\n'){row++;col=0;continue;}
