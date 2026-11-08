@@ -178,7 +178,7 @@ Firmware mapping pass completed: live probe, private factory comparison and capa
 - [x] Validate, commit/push and identify an independent backup destination (Windows SSD; encrypted mirror verified).
 No boot writes, reboot tests, flashing, suspend or intentional fault injection.
 
-Passphrase off-disk preservation remains user action; no destructive recovery test was attempted.
+User confirmed the passphrase independently saved on 2026-11-08; no destructive recovery test was attempted.
 
 ## Native Ambient resolution and terminal glyphs (2026-11-08)
 - [x] Find reduced image dimensions and ASCII-only loss in current pipeline.

@@ -187,9 +187,9 @@ The plaintext archive is 33,734,820 bytes. Private snapshot and detailed receipt
 `~/.local/state/mero/foston-recovery/20261107-working-device/`.
 
 The encryption passphrase is outside Git at
-`~/.config/mero/foston-recovery/20261107-archive-passphrase`. **Its independent
-preservation is still pending user action.** Store it privately outside this
-Linux disk. Its value is not printed in agent output or committed.
+`~/.config/mero/foston-recovery/20261107-archive-passphrase`. The user confirmed on 2026-11-08 that the passphrase was independently saved.
+That location is user-managed and has not been inspected by the agent. Keep it
+private and outside this Linux disk. Its value is not printed in agent output or committed.
 
 The archive includes source history at tooling commit `2af58dc`, installed SD
 and resident apps/configuration, the exact keyed agent, private host agent state,
@@ -198,3 +198,25 @@ udev rule and terminal shortcut wrapper. Unrelated host secret files are exclude
 Neither Linux pairing secrets nor device agent journals/full navigation maps
 are included. This verifies backup integrity and decryption, **not** a boot or
 firmware restoration procedure. No intentional failure/reboot test was run.
+
+## Display milestone recovery increment — 2026-11-08
+
+After commit `de2954c`, an encrypted increment preserves the updated agent,
+verified app read-backs, source history, signed receipts, current host agent
+state and screen evidence. It complements the baseline; it is not a complete
+replacement for it. Both the repository copy and second-drive mirror were
+hash-verified, archive members checked and decryption tested with the same
+passphrase as the baseline.
+
+- Repository: `recovery-private/20261108-display-increment.tar.gz.gpg`.
+- Mirror: `/mnt/windows-ssd/Mero-Recovery/Foston/20261108-display-increment.tar.gz.gpg`.
+- Cipher SHA256: `a7e721e46430e2f55df6381fcf94b0b326f93850a543da7749df0babaacc9f67`.
+- Manifest:1478 files;1479 archived file members including the manifest.
+- App backups:906 terminal,909 Ambient. Agent old backup:
+  `\SDMMC\BT\AgentUpdate\old-d84a0019019b8f7a.exe`.
+
+Ambient photo mapping changed from V1 to V2. A rollback to the older Ambient
+renderer requires a compatible agent build through the signed upgrade workflow.
+Do not directly overwrite the running agent or assume one old app file reverses
+a protocol change. The preserved source commits and keyed versions support a
+reviewed coordinated rollback; no destructive rollback test was run.

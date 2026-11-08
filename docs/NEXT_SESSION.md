@@ -473,3 +473,11 @@ Validation: make, make check, glyph generator, native JPEG rejection/bounds,
 real tmux Unicode and native terminal tests passed. Hardware screenshot checks
 passed; no cold reboot or destructive recovery test. Baseline encrypted
 preservation bundle remains unchanged. User confirmed its passphrase is saved.
+
+Display milestone de2954c pushed. Latest encrypted recovery increment is
+recovery-private/20261108-display-increment.tar.gz.gpg, mirrored on Windows SSD.
+1478 manifest files /1479 archive members verified; decryption and copy hashes
+pass. CipherSHA256 a7e721e46430e2f55df6381fcf94b0b326f93850a543da7749df0babaacc9f67.
+Uses the baseline passphrase, which the user confirmed independently saved.
+Baseline and increment both remain required. Current stream dimensions were
+checked from the actual host JPEG as480x272. No boot/resident changes.
