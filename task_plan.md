@@ -169,3 +169,11 @@ User ended work for sleep. Preserve the open latency issue and resume from the t
 - [ ] Document hardware/control map, recovery gaps and next safe experiments; commit/push milestones.
 
 Firmware mapping pass completed: live probe, private factory comparison and capability map recorded in docs/FIRMWARE_RESEARCH.md.
+
+## Recovery/preservation mission (2026-11-07)
+- [ ] Inventory live app/config/bootstrap paths and host dependencies.
+- [ ] Retrieve a verified device-file snapshot without changing startup.
+- [ ] Package private host/OEM/evidence material with hashes and offline verification.
+- [ ] Document recovery tiers, untested gaps and lessons for future devices.
+- [ ] Validate, commit/push and identify an independent backup destination.
+No boot writes, reboot tests, flashing, suspend or intentional fault injection.

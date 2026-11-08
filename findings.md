@@ -158,3 +158,8 @@ Benchmark correction: even later immediate-launch samples6939/7503/7660ms were n
 - Static Herdr config specifies prefixCtrl+Space and detachprefix+d. Host Layout encodes Ctrl+Space as00, but MeroKeyboardTextValid rejected all NUL bytes before delivery/acknowledgement. This prevented Herdr receiving its prefix and could eventually release capture on timeout. Touch Character() also failed to translate CTRL+Space into NUL.
 - Permit U+0000 in validated UTF-8 input, but deliver it only to the exact foreground Mero Terminal (including resolved MERO_FOREGROUND). Other apps reject the entire NUL-containing packet before any character is posted. Durable intent/dedup/focus checks retained. Native touch CTRL+Space/@/2 now emits00 through the signed terminal bus.
 - Actual native tests cover NUL delivery/dedup for explicit/generic Terminal, whole-packet rejection for other apps, malformed UTF-8 and touch conversion/hex transport. Full checks pass. No Herdr session-control command or process kill was issued from outside Herdr; fixing the keyboard path permits the user's normal detach binding.
+
+Recovery audit: readable resident Mero shell 64000B and SD shell 66560B are
+different preservation targets; no automatic resident sync is needed. Agent
+path remains SDMMC/BT/Downloads/101907-mero-agent.exe. File backup cannot restore
+bootloader, full CE ROM, NAND geometry or unavailable Bluetooth pairing keys.

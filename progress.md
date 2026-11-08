@@ -262,3 +262,13 @@ See docs/FIRMWARE_RESEARCH.md for evidence, private paths and capability limits.
 No boot/flash/power-state/registry changes. Full firmware backup and tested
 restore route still missing. Next: offline OEM contracts and correctly typed
 read-only store/partition geometry; do not infer privilege from exported APIs.
+
+## Recovery/preservation mission — in progress
+User explicitly prioritizes preserving the useful device over bare-metal access.
+No app deployment, boot writes, power transitions or failure injection.
+Added private signed file collector + exact hash verifier and recovery runbook.
+Device snapshot running at ~/.local/state/mero/foston-recovery/20261107-working-device.
+Resident fallback is older and must remain intact; successful process creation
+is not a watchdog for a subsequently crashing SD shell. Independent copy awaits
+a private destination. Collector tests include mocked read-only operations and
+corruption/missing/extra/symlink rejection.
