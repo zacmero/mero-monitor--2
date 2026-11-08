@@ -38,7 +38,7 @@ Stream reads of ROM modules such as buses.dll failed. No bypass was attempted. T
 ## Next evidence-backed steps
 
 1. Parse the copied default hive offline using a reviewed CE hive parser, keeping decoded contents private. Compare factory startup/power values with the live inventory.
-2. Evaluate a documented `RegSaveKey` export of the live system/user hives to owned SD files, then retrieve and hash them. No import/replace operation is authorized by this investigation.
+2. Investigate live hive export semantics before executing an export. `RegSaveKey` can invoke an OEM persistence hook; its name does not make it a read-only operation. No import/replace operation is authorized by this investigation.
 3. Obtain matching CE storage-manager headers before any documented store/partition enumeration. The current SDK lacks the relevant headers; do not guess structure layouts or raw disk calls.
 4. Design a timed ScreenOff/On experiment with an independent recovery path before trying it. An accepted power-state request alone cannot verify physical LCD darkness. Whole-device suspend may lose the Bluetooth control path.
 5. Establish exact board/flash layout and a known restoration route before considering any persistent startup or firmware change. No auto-power-on fix has been established.
@@ -46,3 +46,53 @@ Stream reads of ROM modules such as buses.dll failed. No bypass was attempted. T
 Primary API references: [GetDevicePower](https://learn.microsoft.com/en-us/previous-versions/windows/embedded/aa447831%28v%3Dmsdn.10%29), [SetSystemPowerState](https://learn.microsoft.com/en-us/previous-versions/windows/embedded/ms920754%28v%3Dmsdn.10%29), [FindFirstStore](https://learn.microsoft.com/en-us/previous-versions/windows/embedded/ms889696%28v%3Dmsdn.10%29). These describe CE APIs, not guaranteed behavior of this OEM implementation.
 
 Validation: helper build, report process identity and signed retrieval passed; `check_firmware_probe.py` checks the actual bounded report writer and rejects prohibited API references. Full repository checks passed. These checks support the investigation's limited behavior; they do not certify flash recovery.
+
+
+## Extended live map — 2026-11-07
+
+The new headless probe completed with 134 keys, no truncation and a healthy
+writer. Signed GET 781 retrieved 34,421 bytes, SHA-256
+`5cb498e10971c37c8cff1097e45674d78b9413e537800a1f6760b55eef29ce5e`.
+Probe deployment 778 preserved backup 778; executable read-back matched
+`1aceed706720a869c2e504695036d7cc884d05ac01b2a969927fa4b2a548845f`
+(27,648 bytes). Launch 780 produced this report. No hardware setters, privileged
+memory APIs, registry writes, flash operations or power transitions were invoked.
+
+| Area | Evidence and practical control boundary |
+|---|---|
+| Platform | OEM `MTK`, platform `APOLLO`, ARM architecture 5 / processor level 4 / revision 4. Exact SoC and board revision remain unidentified. |
+| Low-level API surface | `KernelIoControl`, `VirtualCopy`, `SetKMode`, `SetProcPermissions`, `ReadProcessMemory` and `MapCallerPtr` are exported by coredll. Addresses were resolved only; privileges, mappings and hardware access were not tested. |
+| Driver map | 35 BuiltIn entries correlated with active stream names; 92 loaded modules enumerated. The system-wide list includes buses, DMA, SPC, FMC, USB function, GPS, NAND block and display modules. A DLL absent from this probe process can still be loaded elsewhere. |
+| GPIO / DMA | Registry GPIO `buses.dll`, GIO1, MemBase `0x80002000`; DMA `dmadrv.dll`, `0x80023000`. These are configured addresses, not validated physical addresses or permission to access registers. |
+| Display / PWM | `ddi.dll`, BKL/PWM interfaces and existing OEM brightness control. Minimum brightness works; actual backlight-off and reliable remote wake remain unverified. ScreenOff is configured to put the display class in D4 while leaving the default in D0. |
+| FM | FMC driver is loaded. Live-only values report Power=1, Enable=1, FreqKHz=107900, Frequency=1079. They do not prove RF activity, an IOCTL contract, or a safe way to change transmission. |
+| Bluetooth | MTK UART plus ANW/Windows Bluetooth modules are loaded; our signed two-way agent operation is verified. No adapter/driver replacement is indicated by this map. |
+| Storage | NAND block/profile and three configured partitions are visible. There is still no raw NAND image, bootloader dump, exact geometry or tested restoration route. |
+| Object store | Capacity 3,678,208 bytes; free 551,180 bytes during this probe. Physical free RAM was 40,443,904 bytes. This explains why free RAM does not make Temp staging reliable; retain the RAM-only transfer path. |
+| Power-on | Charger wake flags exist in SPC configuration. They concern the running OS; they do not establish a charging-screen/bootloader auto-start switch. |
+
+The factory hive was decoded offline with [hvtool](https://github.com/nlitsme/hvtool),
+commit `7093a5c125bdc0d78d23adf9afe6801a8ae25b1d`, using itslib commit
+`49f88ee0f292f24bbc7a32d2cbdeb8821d40ad3d`. A private portable build substituted
+read-only FileReader for MmapReader; parsing logic was unchanged. The source
+hive SHA-256 remained `767217403fdb17742188adba5a8737ac953bd679e99f54cb9153e87f7b745c06`.
+All 1,084 decoded sections stay private. Factory Launch50 is confirmed as
+`launch.exe`; the live resident recovery-shell path is preserved. The comparison
+found eight differences among comparable values in shared queried sections,
+including calibration, startup, display metadata and four live FM values. This
+is a bounded comparison, not a complete live-registry diff. Default (`@`) values
+are normalized explicitly; unknown binary encodings are excluded from comparison.
+
+Private evidence: `~/.local/state/mero/foston-evidence/firmware-map-20261107-225234/`.
+`map-v2.json` is the corrected derived map; `map.json` is retained as an earlier
+parser result that omitted factory unnamed values. Use `scripts/foston_firmware_map.py`
+to derive future comparisons; it rejects incomplete reports and refuses output overwrite.
+
+[RegSaveKey](https://learn.microsoft.com/en-us/previous-versions/windows/embedded/ms891466(v=msdn.10))
+is exported, but was deliberately not called: the documented
+[OEM hive persistence hook](https://learn.microsoft.com/en-us/previous-versions/windows/embedded/ms904469(v=msdn.10))
+can copy the system hive to persistent storage. Matching CE storage-manager
+headers are still required before store/partition enumeration. The strongest
+next steps are offline OEM driver-contract analysis and documented read-only
+storage geometry enumeration, followed by establishing a restoration route.
+Direct register writes or boot experiments are not justified by export presence.

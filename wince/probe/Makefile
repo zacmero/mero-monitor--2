@@ -18,7 +18,7 @@ all: $(TARGET) mero-screen.exe mero-boot-probe.exe
 mero-terminal-latency.exe: mero-terminal-latency.c ../mero-bus.h ../mero-live-codec.h
 	docker run --rm -u $(shell id -u):$(shell id -g) -v "$(CURDIR)/..":/work -w /work/probe $(DOCKER_IMG) arm-mingw32ce-gcc $(CFLAGS) -s -o $@ $< $(LDFLAGS) -lcoredll
 mero-firmware-probe.exe: mero-firmware-probe.c
-	docker run --rm -u $(shell id -u):$(shell id -g) -v "$(CURDIR)":/work -w /work $(DOCKER_IMG) arm-mingw32ce-gcc $(CFLAGS) -s -o $@ $< $(LDFLAGS) -lcoredll
+	docker run --rm -u $(shell id -u):$(shell id -g) -v "$(CURDIR)":/work -w /work $(DOCKER_IMG) arm-mingw32ce-gcc $(CFLAGS) -s -o $@ $< $(LDFLAGS) -lcoredll -ltoolhelp
 mero-backlight-min.exe: mero-backlight-min.c ../mero-cinema-backlight.h
 	docker run --rm -u $(shell id -u):$(shell id -g) -v "$(CURDIR)/..":/work -w /work/probe $(DOCKER_IMG) arm-mingw32ce-gcc $(CFLAGS) -s -o $@ $< $(LDFLAGS) -lcoredll
 mero-boot-probe.exe: mero-boot-probe.c ../mero-usb.h

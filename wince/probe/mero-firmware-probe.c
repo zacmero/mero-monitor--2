@@ -3,6 +3,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <pm.h>
+#include <tlhelp32.h>
 #include <stdio.h>
 #include <string.h>
 static HANDLE output;
@@ -77,6 +78,56 @@ static void FileHeader(const WCHAR *path){
     for(i=0;i<n;i++)sprintf(hex+i*2,"%02x",bytes[i]);hex[n*2]=0;
     snprintf(line,sizeof(line),"size=%lu first_bytes=%s\r\n",size,hex);Line(line);
 }
+/* Export addresses are metadata, not permission or successful hardware access.
+   Never load an OEM DLL or invoke the functions listed by this inventory. */
+static void ApiInventory(void){
+    const WCHAR *modules[]={L"coredll.dll",L"storeapi.dll",L"buses.dll",L"spc.dll",L"FMC.dll",L"block.dll",L"usbfn.dll",L"gps.dll",L"dmadrv.dll",NULL};
+    const WCHAR *core[]={L"KernelIoControl",L"VirtualCopy",L"SetKMode",L"SetProcPermissions",L"GetCurrentPermissions",L"GetSystemMemoryDivision",L"ReadProcessMemory",L"MapCallerPtr",L"RegSaveKey",L"RegCopyFile",L"FindFirstStore",L"FindFirstPartition",L"OpenStore",L"GetStoreInfo",L"SetSystemPowerState",L"GetSystemPowerState",L"GetDevicePower",L"SetDevicePower",NULL};
+    const WCHAR *drivers[]={L"GIO_Init",L"GIO_IOControl",L"BKL_Init",L"BKL_IOControl",L"PWM_Init",L"PWM_IOControl",L"SPC_Init",L"SPC_IOControl",L"FMC_Init",L"FMC_IOControl",L"DSK_Init",L"DSK_IOControl",L"UFN_Init",L"UFN_IOControl",L"COM_Init",L"COM_IOControl",NULL};
+    unsigned int i,j;char name[256],symbol[128],line[700];
+    Line("\r\n[LOADED EXPORT PRESENCE ONLY - NOT EXECUTED]\r\n");
+    for(i=0;modules[i];i++){
+        HMODULE module=GetModuleHandleW(modules[i]);const WCHAR **names=i<2?core:drivers;
+        Utf8(modules[i],name,sizeof(name));snprintf(line,sizeof(line),"module=%s current_process_loaded=%d handle=0x%08lx\r\n",name,module!=NULL,(DWORD)module);Line(line);
+        if(!module)continue;
+        for(j=0;names[j];j++){
+            FARPROC address=GetProcAddress(module,names[j]);Utf8(names[j],symbol,sizeof(symbol));
+            snprintf(line,sizeof(line),"export=%s!%s present=%d address=0x%08lx\r\n",name,symbol,address!=NULL,(DWORD)address);Line(line);
+        }
+    }
+}
+static void ModuleInventory(void){
+    MODULEENTRY32 entry;HANDLE snapshot;DWORD count=0;char name[1024],path[1024],line[2300];
+    Line("\r\n[LOADED MODULES - VIRTUAL ADDRESSES]\r\n");
+    snapshot=CreateToolhelp32Snapshot(TH32CS_SNAPMODULE|TH32CS_GETALLMODS,0);
+    if(snapshot==INVALID_HANDLE_VALUE){snprintf(line,sizeof(line),"snapshot_error=%lu\r\n",GetLastError());Line(line);return;}
+    memset(&entry,0,sizeof(entry));entry.dwSize=sizeof(entry);
+    if(Module32First(snapshot,&entry))do{
+        entry.szModule[MAX_MODULE_NAME32]=0;entry.szExePath[MAX_PATH-1]=0;
+        Utf8(entry.szModule,name,sizeof(name));Utf8(entry.szExePath,path,sizeof(path));
+        snprintf(line,sizeof(line),"module=%s base=0x%08lx bytes=%lu path=%s\r\n",name,(DWORD)entry.modBaseAddr,entry.modBaseSize,path);Line(line);
+        if(++count>=256){Line("module_list_limit=256\r\n");truncated=1;break;}
+        entry.dwSize=sizeof(entry);
+    }while(Module32Next(snapshot,&entry));
+    else {snprintf(line,sizeof(line),"first_module_error=%lu\r\n",GetLastError());Line(line);}
+    CloseToolhelp32Snapshot(snapshot);
+}
+static void IdentityQuery(void){
+    WCHAR value[256];char text[1024],line[1300];SYSTEM_INFO info;STORE_INFORMATION store;
+    typedef BOOL (*StoreQuery)(LPSTORE_INFORMATION);
+    StoreQuery query=(StoreQuery)GetProcAddress(GetModuleHandleW(L"coredll.dll"),L"GetStoreInformation");
+    Line("\r\n[READ-ONLY IDENTITY AND OBJECT STORE]\r\n");
+    memset(value,0,sizeof(value));
+    if(SystemParametersInfoW(SPI_GETOEMINFO,256,value,0)){value[255]=0;Utf8(value,text,sizeof(text));snprintf(line,sizeof(line),"oem=%s\r\n",text);Line(line);}
+    else {snprintf(line,sizeof(line),"oem_query_error=%lu\r\n",GetLastError());Line(line);}
+    memset(value,0,sizeof(value));
+    if(SystemParametersInfoW(SPI_GETPLATFORMTYPE,256,value,0)){value[255]=0;Utf8(value,text,sizeof(text));snprintf(line,sizeof(line),"platform=%s\r\n",text);Line(line);}
+    else {snprintf(line,sizeof(line),"platform_query_error=%lu\r\n",GetLastError());Line(line);}
+    memset(&info,0,sizeof(info));GetSystemInfo(&info);snprintf(line,sizeof(line),"processor_arch=%u level=%u revision=%u page_size=%lu processors=%lu\r\n",info.wProcessorArchitecture,info.wProcessorLevel,info.wProcessorRevision,info.dwPageSize,info.dwNumberOfProcessors);Line(line);
+    memset(&store,0,sizeof(store));
+    if(query&&query(&store)){snprintf(line,sizeof(line),"object_store_bytes=%lu object_store_free=%lu\r\n",store.dwStoreSize,store.dwFreeSize);Line(line);}
+    else {snprintf(line,sizeof(line),"object_store_query_available=%d error=%lu\r\n",query!=NULL,GetLastError());Line(line);}
+}
 static void PowerQuery(void){
     typedef DWORD (*StateQuery)(LPWSTR,DWORD,PDWORD);
     typedef DWORD (*DeviceQuery)(PVOID,DWORD,PCEDEVICE_POWER_STATE);
@@ -109,19 +160,23 @@ int WINAPI WinMain(HINSTANCE a,HINSTANCE b,LPWSTR args,int show){
     snprintf(line,sizeof(line),"processor_type=%lu physical_total=%lu physical_free=%lu\r\n",system.dwProcessorType,memory.dwTotalPhys,memory.dwAvailPhys);Line(line);
     Registry(HKEY_LOCAL_MACHINE,L"init","HKLM",0);
     Registry(HKEY_LOCAL_MACHINE,L"Ident","HKLM",0);
+    Registry(HKEY_LOCAL_MACHINE,L"Platform","HKLM",2);
+    Registry(HKEY_LOCAL_MACHINE,L"HARDWARE","HKLM",3);
+    Registry(HKEY_LOCAL_MACHINE,L"System\\GDI","HKLM",2);
     Registry(HKEY_LOCAL_MACHINE,L"System\\StorageManager","HKLM",3);
     Registry(HKEY_LOCAL_MACHINE,L"System\\CurrentControlSet\\Control\\Power","HKLM",3);
     Registry(HKEY_LOCAL_MACHINE,L"System\\State","HKLM",1);
     Registry(HKEY_LOCAL_MACHINE,L"System\\BootVars","HKLM",1);
-    Registry(HKEY_LOCAL_MACHINE,L"Drivers\\BuiltIn","HKLM",1);
+    Registry(HKEY_LOCAL_MACHINE,L"Drivers\\BuiltIn","HKLM",2);
     Registry(HKEY_LOCAL_MACHINE,L"Drivers\\Active","HKLM",1);
     Registry(HKEY_LOCAL_MACHINE,L"Software\\Mesada","HKLM",2);
     Registry(HKEY_LOCAL_MACHINE,L"Software\\Microsoft\\Shell","HKLM",1);
     Registry(HKEY_CURRENT_USER,L"ControlPanel\\Power","HKCU",2);
     Registry(HKEY_CURRENT_USER,L"ControlPanel\\BackLight","HKCU",1);
-    PowerQuery();
+    IdentityQuery();ApiInventory();ModuleInventory();PowerQuery();
     Directory(L"\\ResidentFlash");Directory(L"\\ResidentFlash2");Directory(L"\\SDMMC");
     Directory(L"\\SDMMC\\BACKUP");
+    Directory(L"\\");Directory(L"\\Temp");
     FileHeader(L"\\ResidentFlash2\\ARC.BIN");FileHeader(L"\\ResidentFlash2\\BEE.BIN");FileHeader(L"\\SDMMC\\logo.nb0");
     {const WCHAR *files[]={L"\\Windows\\nk.exe",L"\\Windows\\buses.dll",L"\\Windows\\default.hv",L"\\system.hv",L"\\user.hv",NULL};int i;
      Line("\r\n[ROM AND HIVE FILE ATTRIBUTES]\r\n");

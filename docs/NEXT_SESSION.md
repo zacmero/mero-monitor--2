@@ -397,3 +397,15 @@ invalidation, startup retry/mutex cleanup, and OEM USB sizes/codes/rollback.
 Future ideas remain in [COMPANION_ROADMAP.md](COMPANION_ROADMAP.md): six-button
 PC control, VM activity relay, adaptive gallery/ambient rotation, focus/inbox,
 real audio spectrum and outdoor GPS logging. Prioritize finishing startup first.
+
+
+### Firmware mapping pass — 2026-11-07
+Read-only probe deployed with backup 778; read-back SHA256
+`1aceed706720a869c2e504695036d7cc884d05ac01b2a969927fa4b2a548845f`.
+Fresh report GET 781 completed healthy/untruncated: MTK/APOLLO, 134 registry
+keys, 35 BuiltIn driver entries, 92 loaded modules, 551180 bytes object-store
+free. Factory hive decoded offline (1084 sections), original hash unchanged.
+See docs/FIRMWARE_RESEARCH.md for evidence, private paths and capability limits.
+No boot/flash/power-state/registry changes. Full firmware backup and tested
+restore route still missing. Next: offline OEM contracts and correctly typed
+read-only store/partition geometry; do not infer privilege from exported APIs.

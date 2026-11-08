@@ -250,3 +250,15 @@ Private durable evidence archive: `/home/zacmero/.local/state/mero/foston-eviden
 - Matching terminal put772/get773 verified31744B SHAb3e2ad08…; backup772 preserves00da812c… hidden-board/shortcut app. Launch774 restored the terminal view. User asked to retry actual Ctrl+Space then lowercase d after the forwarding repair; confirmation pending.
 
 - User confirmed: "Yes, back at Bash" after the deployed Ctrl+Space correction. Fix44bf43d pushed; actual detach path now verified without stopping Herdr sessions.
+
+
+### Firmware mapping pass — 2026-11-07
+Read-only probe deployed with backup 778; read-back SHA256
+`1aceed706720a869c2e504695036d7cc884d05ac01b2a969927fa4b2a548845f`.
+Fresh report GET 781 completed healthy/untruncated: MTK/APOLLO, 134 registry
+keys, 35 BuiltIn driver entries, 92 loaded modules, 551180 bytes object-store
+free. Factory hive decoded offline (1084 sections), original hash unchanged.
+See docs/FIRMWARE_RESEARCH.md for evidence, private paths and capability limits.
+No boot/flash/power-state/registry changes. Full firmware backup and tested
+restore route still missing. Next: offline OEM contracts and correctly typed
+read-only store/partition geometry; do not infer privilege from exported APIs.

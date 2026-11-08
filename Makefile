@@ -46,6 +46,7 @@ check:
 	python3 scripts/check_live_compression.py
 	python3 scripts/check_terminal.py
 	python3 scripts/check_firmware_probe.py
+	python3 scripts/check_firmware_map.py
 	python3 scripts/check_backlight_app.py
 	python3 scripts/check_backlight_script.py
 	cc scripts/check_backlight.c -o /tmp/mero-check-backlight

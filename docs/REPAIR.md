@@ -299,3 +299,15 @@ Fast25ms host polling modestly reduced sampled deliveryACK median572→451ms; sa
 Ctrl+Space was rejected as NUL by native keyboard validation, preventing Herdr's configured detach prefix and potentially timing out PC capture. Touch CTRL+Space also lacked the NUL mapping. Both paths are corrected: NUL delivery is restricted to foreground Mero Terminal; all other targets reject a NUL-containing packet before partial posting. Durable journal/dedup/foreground and malformed UTF-8 checks remain.
 
 Agent upgrade771 verified SHA2561b857bc49f90f037b35976ba0a8b09a55636d2885abf3d69a58e55a578727010, prior backup BT/AgentUpdate/old-c105d08e76025a12.exe. Terminal put772/get773 verified31744B SHAb3e2ad0879f44d992b0ec080aab5dbacdf8e0501cc9c0e8f1ce58abda60198e0; backup772 preserves prior app. Full checks pass. User confirmed the updated sequence returned to Bash. Herdr sessions were not stopped.
+
+
+### Firmware mapping pass — 2026-11-07
+Read-only probe deployed with backup 778; read-back SHA256
+`1aceed706720a869c2e504695036d7cc884d05ac01b2a969927fa4b2a548845f`.
+Fresh report GET 781 completed healthy/untruncated: MTK/APOLLO, 134 registry
+keys, 35 BuiltIn driver entries, 92 loaded modules, 551180 bytes object-store
+free. Factory hive decoded offline (1084 sections), original hash unchanged.
+See docs/FIRMWARE_RESEARCH.md for evidence, private paths and capability limits.
+No boot/flash/power-state/registry changes. Full firmware backup and tested
+restore route still missing. Next: offline OEM contracts and correctly typed
+read-only store/partition geometry; do not infer privilege from exported APIs.

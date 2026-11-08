@@ -160,3 +160,12 @@ User ended work for sleep. Preserve the open latency issue and resume from the t
 - [x] Test/build/backed-up deployment; active Hyprland binding and device UI verified.
 - [ ] Optional human test of the physical shortcut in both directions.
 - [x] Update installation/handoff; Foston a1d0f35 and ArchMerOS a18817a pushed.
+
+## Firmware hardware mapping: read-only investigation
+- [x] Resume firmware evidence and verify backup limits.
+- [ ] Decode copied default CE hive offline with a reviewed parser; compare driver/power/boot configuration.
+- [ ] Build a bounded read-only driver/API/registry/storage inventory using documented interfaces only.
+- [ ] Back up/deploy probe, verify signed retrieval and classify capabilities versus unknowns.
+- [ ] Document hardware/control map, recovery gaps and next safe experiments; commit/push milestones.
+
+Firmware mapping pass completed: live probe, private factory comparison and capability map recorded in docs/FIRMWARE_RESEARCH.md.
