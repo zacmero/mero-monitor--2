@@ -502,3 +502,14 @@ Actual native still/moving draw tests, build and full make check passed.
 Private app/readback receipts: recovery-private/20261108-still/.
 Earlier recovery baseline/increment remain intact. No agent/boot/firmware edits
 in this pass. The user accepted the display artifact; no further action needed.
+
+## Shell portrait default — 2026-11-08
+User requested vertical as standard interface default. SD shell now starts
+with logical272x480 portrait before its first paint, keeping the actual
+480x272 window and existing touch rotation. It no longer waits for Bluetooth
+to select portrait; later orientation toggles still work. Missing orientation
+fields do not reset the shell to landscape. Resident fallback/boot untouched.
+Stop928 / put929 (backup929) / byte-exact readback930 / home launch931 passed.
+Installed shell66560B SHA256
+bfa8f952d336eb41576747cf071321c824ec94fdc1c8223582fda8bc3ebd3bc4.
+Build, launcher tests and full make check passed.

@@ -927,9 +927,9 @@ static void BluetoothSet(DWORD mode);
 static void BluetoothPairing(void);
 
 static COLORREF MenuColor(int n){static const COLORREF colors[]={RGB(255,197,93),RGB(255,132,119),RGB(110,225,179),RGB(193,154,255),RGB(117,209,255),RGB(249,150,207)};return colors[n%6];}
-static int g_portrait;
+static int g_portrait=1;
 static void ShellLiveLine(char *line){
- if(!strncmp(line,"MERO:AMB:",9)){char *p=strstr(line,"portrait=");int next=p?atoi(p+9):0;
+ if(!strncmp(line,"MERO:AMB:",9)){char *p=strstr(line,"portrait=");int next;if(!p)return;next=atoi(p+9)!=0;
  if(next!=g_portrait){g_portrait=next;g_screenW=next?272:480;g_screenH=next?480:272;InvalidateRect(g_hWnd,NULL,FALSE);}}
 }
 static void UpdateButtons(void)
@@ -1838,13 +1838,14 @@ int WINAPI WinMain(
         return 1;
     }
 
+    g_screenW=g_portrait?272:480;g_screenH=g_portrait?480:272;
     g_hWnd = CreateWindowExW(
         WS_EX_TOPMOST,
         L"MeroShellWndClass",
         L"Mero Shell",
         WS_VISIBLE | WS_POPUP,
         0, 0,
-        g_screenW, g_screenH,
+        480, 272,
         NULL,
         NULL,
         hInstance,
