@@ -171,9 +171,11 @@ User ended work for sleep. Preserve the open latency issue and resume from the t
 Firmware mapping pass completed: live probe, private factory comparison and capability map recorded in docs/FIRMWARE_RESEARCH.md.
 
 ## Recovery/preservation mission (2026-11-07)
-- [ ] Inventory live app/config/bootstrap paths and host dependencies.
-- [ ] Retrieve a verified device-file snapshot without changing startup.
-- [ ] Package private host/OEM/evidence material with hashes and offline verification.
-- [ ] Document recovery tiers, untested gaps and lessons for future devices.
-- [ ] Validate, commit/push and identify an independent backup destination.
+- [x] Inventory live app/config/bootstrap paths and host dependencies.
+- [x] Retrieve a verified device-file snapshot without changing startup.
+- [x] Package private host/OEM/evidence material with hashes and offline verification.
+- [x] Document recovery tiers, untested gaps and lessons for future devices.
+- [x] Validate, commit/push and identify an independent backup destination (Windows SSD; encrypted mirror verified).
 No boot writes, reboot tests, flashing, suspend or intentional fault injection.
+
+Passphrase off-disk preservation remains user action; no destructive recovery test was attempted.

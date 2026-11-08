@@ -132,6 +132,10 @@ a separately reviewed procedure. Linux Bluetooth pairing keys may need root acce
 and are not included by the unprivileged collector. The adapter dependency also
 remains. Having the agent key alone does not establish new-host recovery.
 
+An encrypted copy also needs an independently preserved recovery key. Keeping
+that key only on the original Linux disk does not protect against losing that
+disk. Do not post the key in chat, Git or the Bluetooth share.
+
 Maintain a copy on another physical device, preferably off-machine. On filesystems
 that cannot enforce private permissions, encrypt the bundle before copying it.
 No independent copy is complete until its checksum and offline manifest verify.
@@ -157,3 +161,40 @@ Next for this Foston: investigate exact OEM recovery contracts offline, obtain
 matching CE storage enumeration headers, and map storage geometry through
 read-only APIs. No raw disk writes, guessed IOCTLs, bootloader edits, whole-device
 suspend or firmware experiments are part of this preservation mission.
+
+## Preserved working state — 2026-11-07
+
+Collection completed with final signed status **895**, `agent_ready`. The running
+agent SHA256 matched its downloaded executable. No apps, boot configuration or
+power state were changed. The collector downloaded **100 device files**; the
+enriched private manifest covers **1681 files** plus the manifest itself.
+
+The encrypted bundle is available in the explicitly ignored repository directory
+`recovery-private/20261107-foston-preservation-v2.tar.gz.gpg`. A byte-identical copy
+is on `/mnt/windows-ssd/Mero-Recovery/Foston/`, a different physical drive
+(`/dev/sda3`; Linux root is `/dev/sdc1`). This is independent of the Linux disk,
+but still in the same computer. No off-machine copy has been established.
+
+All 1682 archived file members were hash-compared with the sealed source set.
+GnuPG decryption reproduced the original archive hash. The second-drive and
+repository encrypted copies matched:
+
+`0d9c07f34604fe569dc23c01894f9efdd3514081f2ab1cb14d823d047c6d0f5e`
+
+Plain archive SHA256:
+`af07b9d322df4da298cb0d5e3d38befa8994c0e959dc1db9b153b050e2ea6e9a`.
+The plaintext archive is 33,734,820 bytes. Private snapshot and detailed receipts:
+`~/.local/state/mero/foston-recovery/20261107-working-device/`.
+
+The encryption passphrase is outside Git at
+`~/.config/mero/foston-recovery/20261107-archive-passphrase`. **Its independent
+preservation is still pending user action.** Store it privately outside this
+Linux disk. Its value is not printed in agent output or committed.
+
+The archive includes source history at tooling commit `2af58dc`, installed SD
+and resident apps/configuration, the exact keyed agent, private host agent state,
+OEM file-copy archive, decoded factory-hive evidence, obex runtime, keyboard
+udev rule and terminal shortcut wrapper. Unrelated host secret files are excluded.
+Neither Linux pairing secrets nor device agent journals/full navigation maps
+are included. This verifies backup integrity and decryption, **not** a boot or
+firmware restoration procedure. No intentional failure/reboot test was run.

@@ -272,3 +272,28 @@ Resident fallback is older and must remain intact; successful process creation
 is not a watchdog for a subsequently crashing SD shell. Independent copy awaits
 a private destination. Collector tests include mocked read-only operations and
 corruption/missing/extra/symlink rejection.
+
+Preservation tooling milestone committed/pushed as 2af58dc. Full checks passed.
+Private support set (32 files) sealed and verified: OEM archive, firmware
+evidence, obex runtime archive, source Git bundle, keyboard rule, wrapper and
+version metadata. Resident shell SHA256
+df7c8248619a222c94ded2e8f1c77b769a2ed6f556569d748136099149d4c93a;
+its SD handoff string was verified from the retrieved binary. Live file
+collection continues; no device app or startup changes have been deployed.
+
+## Preservation complete — 2026-11-07
+100 installed device files downloaded; final signed status895 agent_ready.
+Private enriched manifest1681files, archive1682members. Member/source hashes,
+GnuPG decryption and second-physical-drive/repo copies all verified.
+Encrypted bundle: recovery-private/20261107-foston-preservation-v2.tar.gz.gpg
+(explicitly Git-ignored), mirror /mnt/windows-ssd/Mero-Recovery/Foston/.
+Encrypted SHA256 0d9c07f34604fe569dc23c01894f9efdd3514081f2ab1cb14d823d047c6d0f5e.
+Read docs/RECOVERY.md before any recovery. No apps/startup/firmware modified.
+Remaining user action: independently save the passphrase file at
+~/.config/mero/foston-recovery/20261107-archive-passphrase. Do not print it in
+chat or Git. No full firmware image, boot restoration test or off-machine copy.
+Do not restore old host counters/device journals onto newer state.
+
+Final validation: make, make check and git diff --check passed. Repo bundle
+is ignored; second-drive ciphertext and GnuPG decryption verified. Current
+revision is v2; earlier private archives retained. No restoration/fault test.

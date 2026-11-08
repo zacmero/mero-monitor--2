@@ -311,3 +311,16 @@ See docs/FIRMWARE_RESEARCH.md for evidence, private paths and capability limits.
 No boot/flash/power-state/registry changes. Full firmware backup and tested
 restore route still missing. Next: offline OEM contracts and correctly typed
 read-only store/partition geometry; do not infer privilege from exported APIs.
+
+## Preservation complete — 2026-11-07
+100 installed device files downloaded; final signed status895 agent_ready.
+Private enriched manifest1681files, archive1682members. Member/source hashes,
+GnuPG decryption and second-physical-drive/repo copies all verified.
+Encrypted bundle: recovery-private/20261107-foston-preservation-v2.tar.gz.gpg
+(explicitly Git-ignored), mirror /mnt/windows-ssd/Mero-Recovery/Foston/.
+Encrypted SHA256 0d9c07f34604fe569dc23c01894f9efdd3514081f2ab1cb14d823d047c6d0f5e.
+Read docs/RECOVERY.md before any recovery. No apps/startup/firmware modified.
+Remaining user action: independently save the passphrase file at
+~/.config/mero/foston-recovery/20261107-archive-passphrase. Do not print it in
+chat or Git. No full firmware image, boot restoration test or off-machine copy.
+Do not restore old host counters/device journals onto newer state.
