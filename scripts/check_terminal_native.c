@@ -31,6 +31,7 @@ int main(void){
     keyboard=0;viewSent=1;notice[0]=0;
     Touch(80,15,1);assert(keyboard);Touch(80,15,1);assert(!keyboard);
 
+    ctrl=1;Character(' ');assert(inputLen==1&&input[0]==0&&!ctrl);Flush();assert(strstr(track,".00"));commands=0;
     char output[8];assert(Decode("YWJj",output,sizeof(output))&&!strcmp(output,"abc"));
     assert(!Decode("!!!!",output,sizeof(output)));assert(!Decode("YWJjZGVmZ2hp",output,sizeof(output)));
     assert(Enqueue("abc\r",4));allow=0;Flush();assert(inputLen==4&&commands==0);

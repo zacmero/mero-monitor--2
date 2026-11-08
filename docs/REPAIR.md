@@ -293,3 +293,9 @@ Terminal put756/get757 verified31744B SHA256 `00da812c39768bf87468d97b4eeaf661da
 Super+Alt+Insert is installed in active ArchMerOS Lua and legacy configs, with a windowless wrapper. Hyprland reload has no config errors and exposes exactly one Insert/modmask72 binding. Activation launches the named terminal through the signed agent, waits for released keys/fresh foreground confirmation, then captures. Captured evdev detects the same chord to release. Native PC OFF leaves touch keys hidden; SHOW KB/HIDE KB is manual. Existing keyboard permissions and emergency Ctrl+Alt+Escape remain.
 
 Fast25ms host polling modestly reduced sampled deliveryACK median572→451ms; sampled PC-published output median959→932ms shows no major end-to-end gain. These measurements do not end at device paint. Full checks pass; actual physical shortcut feedback is pending. No boot, firmware, USB, key or agent changes.
+
+## Ctrl+Space control-byte correction
+
+Ctrl+Space was rejected as NUL by native keyboard validation, preventing Herdr's configured detach prefix and potentially timing out PC capture. Touch CTRL+Space also lacked the NUL mapping. Both paths are corrected: NUL delivery is restricted to foreground Mero Terminal; all other targets reject a NUL-containing packet before partial posting. Durable journal/dedup/foreground and malformed UTF-8 checks remain.
+
+Agent upgrade771 verified SHA2561b857bc49f90f037b35976ba0a8b09a55636d2885abf3d69a58e55a578727010, prior backup BT/AgentUpdate/old-c105d08e76025a12.exe. Terminal put772/get773 verified31744B SHAb3e2ad0879f44d992b0ec080aab5dbacdf8e0501cc9c0e8f1ce58abda60198e0; backup772 preserves prior app. Full checks pass. Herdr sessions were not stopped; human detach confirmation pending.

@@ -241,3 +241,10 @@ Private durable evidence archive: `/home/zacmero/.local/state/mero/foston-eviden
 - Private keyboard timing/UI evidence archived at `/home/zacmero/.local/state/mero/foston-evidence/keyboard-shortcut-20261107-221441` with SHA256 manifest. Full make/check and both repository whitespace checks pass; actual shortcut feedback remains pending.
 
 - Pushed keyboard-first milestone a1d0f35 (Foston) and a18817a (ArchMerOS). Arch SSH authentication was unavailable; same-repository HTTPS push succeeded using existing authentication, origin URL unchanged. Both services active and no further device controls injected during the pending human shortcut test.
+
+### Ctrl+Space forwarding repair
+- User could not detach Herdr with its configured prefix. Host Layout produces00; native keyboard UTF-8 validation rejected NUL before acknowledgement, and touch CTRL+Space was not mapped. Fixed Terminal-only NUL delivery (explicit/resolved-generic target), preserving foreground, signed durable intent and dedup. Nonterminal NUL packets reject before any partial delivery. Touch CTRL+Space/@/2 produces00.
+- Actual native delivery, duplicate, target-bound, malformed UTF-8 and touch binary-hex tests pass; full make/check and whitespace check pass. No Herdr server/session control or kill was invoked.
+- Stopped terminal764. Protected agent upgrade through status771 verified1b857bc49f90f037b35976ba0a8b09a55636d2885abf3d69a58e55a578727010; backup BT/AgentUpdate/old-c105d08e76025a12.exe preserves095a52e7…. Matching terminal deployment in progress.
+
+- Matching terminal put772/get773 verified31744B SHAb3e2ad08…; backup772 preserves00da812c… hidden-board/shortcut app. Launch774 restored the terminal view. User asked to retry actual Ctrl+Space then lowercase d after the forwarding repair; confirmation pending.

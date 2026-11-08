@@ -22,6 +22,7 @@ def check():
         assert layout.event(30,1)==b'a';assert layout.event(30,1)==b'';assert layout.event(30,2)==b'a';layout.event(30,0)
         layout.event(42,1);assert layout.event(30,1)==b'A';layout.event(30,0);layout.event(42,0)
         layout.event(29,1);assert layout.event(46,1)==b'\x03';layout.event(46,0);layout.event(29,0)
+        layout.event(29,1);assert layout.event(57,1)==b'\x00';layout.event(57,0);layout.event(29,0)
         assert layout.event(103,1)==b'\x1b[A';layout.event(103,0)
         layout.event(125,1);layout.event(56,1)
         try:layout.event(110,1)

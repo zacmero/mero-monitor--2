@@ -27,11 +27,17 @@ int main(void){
     wcscpy(foregroundName,L"Launch");AgentKeyboard("1123456789abcdef:MERO_TERMINAL:61");assert(posted==3);result("wrong_foreground_app");
     wcscpy(foregroundName,L"MERO_TERMINAL");failWrite=1;AgentKeyboard("2123456789abcdef:MERO_TERMINAL:61");assert(posted==3);failWrite=0;
     AgentKeyboard("3123456789abcdef:MERO_FOSTON_AGENT:61");AgentKeyboard("bad:MERO_TERMINAL:61");AgentKeyboard("4123456789abcdef:MERO_TERMINAL:zz");assert(posted==3);
-    AgentKeyboard("7123456789abcdef:MERO_TERMINAL:61c080");AgentKeyboard("8123456789abcdef:MERO_TERMINAL:610062");assert(posted==3);
+    AgentKeyboard("7123456789abcdef:MERO_TERMINAL:61c080");assert(posted==3);
     AgentKeyboard("5123456789abcdef:MERO_TERMINAL:1b5b41");assert(posted==5&&lastMessage==WM_KEYUP&&lastValue==VK_UP);
     wcscpy(foregroundName,L"MeroShellWndClass");AgentKeyboard("6123456789abcdef:MeroShellWndClass:0d");assert(posted==7&&lastValue==VK_RETURN);
     wcscpy(foregroundName,L"MERO_AMBIENT");AgentKeyboard("9123456789abcdef:MERO_AMBIENT:1b");assert(posted==9&&lastValue==VK_ESCAPE);
     AgentKeyboard("a123456789abcdef:MERO_FOREGROUND:20");assert(posted==10&&lastValue==32);
     wcscpy(foregroundName,L"Launch");AgentKeyboard("b123456789abcdef:MERO_FOREGROUND:61");assert(posted==10);result("wrong_foreground_app");
+    wcscpy(foregroundName,L"MERO_TERMINAL");
+    AgentKeyboard("c123456789abcdef:MERO_TERMINAL:00");assert(posted==11&&lastMessage==WM_CHAR&&lastValue==0);result("queued");
+    AgentKeyboard("c123456789abcdef:MERO_TERMINAL:00");assert(posted==11);
+    AgentKeyboard("d123456789abcdef:MERO_FOREGROUND:00");assert(posted==12&&lastValue==0);result("queued");
+    wcscpy(foregroundName,L"MeroShellWndClass");
+    AgentKeyboard("e123456789abcdef:MERO_FOREGROUND:610062");assert(posted==12);result("unsupported_control");
     puts("PASS: actual signed keyboard journal, duplicate suppression, target/focus bounds, write failures and special keys");return 0;
 }

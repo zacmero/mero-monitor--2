@@ -37,7 +37,8 @@ static int Enqueue(const char *bytes,unsigned int count) {
 static void Character(WCHAR ch) {
     char bytes[4];int count;
     if(ch==8)ch=127;if(ch==10)ch=13;
-    if(ctrl&&ch>='a'&&ch<='z')ch=ch-'a'+1;
+    if(ctrl&&(ch==' '||ch=='@'||ch=='2'))ch=0;
+    else if(ctrl&&ch>='a'&&ch<='z')ch=ch-'a'+1;
     else if(ctrl&&ch>='A'&&ch<='Z')ch=ch-'A'+1;
     ctrl=0;count=WideCharToMultiByte(CP_UTF8,0,&ch,1,bytes,sizeof(bytes),NULL,NULL);
     if(count>0)Enqueue(bytes,count);

@@ -76,3 +76,9 @@ The retained combination (RAM sender, compact snapshots, original terminal UI) r
 ArchMerOS tracks the binding in the active `config/hypr/hyprland.lua` and legacy `config/hypr/hyprland.conf` and its windowless wrapper at `config/archmeros/scripts/archmeros-foston-terminal.sh`. The wrapper defaults to `$HOME/projects/mero-monitor-#2`; set `MERO_FOSTON_REPO` if the clone lives elsewhere. It calls `scripts/foston_keyboard.py toggle-terminal`. A failed or unresolved authenticated launch never arms capture or resets pending agent state. Existing permanent keyboard permissions are sufficient; no additional sudo step is needed.
 
 The bridge polls physical input and acknowledgements every approximately 25 ms, independently of display publication. New keyboard packets/mode changes request an immediate snapshot. Active-seat and lock checks target 100 ms intervals while capture is active; errors release the keyboard. Scheduling intervals are not a promised end-to-end latency.
+
+## Ctrl+Space and nested terminal clients
+
+Ctrl+Space is the NUL control byte (`00`), not an ordinary space. The keyboard transport permits it only for the exact foreground Mero Terminal, with the same authenticated request, durable intent and duplicate checks. Other app targets reject a NUL-containing packet before posting any character. The touch keyboard's CTRL then Space (also CTRL+@/2) emits the same byte.
+
+The user's Herdr configuration uses Ctrl+Space followed by D to detach the client and return to Bash, preserving its sessions. Super+Space is the PC launcher, not this prefix. In PC mode, release Ctrl+Space before pressing D; use Super+Alt+Insert to return the keyboard to the PC afterward.

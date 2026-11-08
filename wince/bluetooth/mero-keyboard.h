@@ -19,7 +19,7 @@ static unsigned int MeroKeyboardEscape(const unsigned char *p,unsigned int n,uns
 }
 static int MeroKeyboardTextValid(const unsigned char *p,unsigned int n) {
     unsigned int i=0;
-    while(i<n){unsigned int c=p[i++];if(!c)return 0;
+    while(i<n){unsigned int c=p[i++];
         if(c<128)continue;
         if(c>=0xc2&&c<=0xdf){if(i>=n||(p[i]&0xc0)!=0x80)return 0;i++;}
         else if(c>=0xe0&&c<=0xef){
@@ -52,7 +52,9 @@ static void AgentKeyboard(const char *field) {
         char name[64];unsigned int j;for(j=0;j<63&&actual[j]&&actual[j]<128;j++)name[j]=(char)actual[j];name[j]=0;
         if(!actual[j]&&MeroKeyboardTarget(name))lstrcpyW(wide,actual);
     }
-    if(!wcscmp(actual,wide)) {
+    if(!wcscmp(actual,wide)&&memchr(bytes,0,len)&&wcscmp(wide,L"MERO_TERMINAL"))
+        outcome="unsupported_control";
+    else if(!wcscmp(actual,wide)) {
         outcome="queued";
         for(i=0;i<len;) {
             unsigned int used=0,vk=MeroKeyboardEscape(bytes+i,len-i,&used);

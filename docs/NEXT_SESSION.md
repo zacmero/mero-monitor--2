@@ -1,3 +1,15 @@
+# Latest checkpoint: Ctrl+Space forwarding repaired (2026-11-07)
+
+User could not detach an accidentally opened Herdr client. Static Herdr config uses Ctrl+Space then lowercase d. Host Layout generated00 correctly, but native keyboard validation rejected NUL before acknowledgement; touch CTRL+Space also emitted ordinary space. This was a forwarding bug, not a reason to stop Herdr sessions.
+
+- Agent now accepts NUL only for the exact foreground Mero Terminal, including resolved MERO_FOREGROUND. Nonterminal packets containing NUL reject before any character is posted. Signed durable intent/dedup, malformed UTF-8 checks and foreground checks remain intact.
+- Touch CTRL+Space/@/2 emits00 through the existing signed terminal bus. Host tests exercise actual native NUL delivery/dedup, other-target whole-packet rejection and touch hex framing.
+- Protected agent upgrade through status771: SHA256 `1b857bc49f90f037b35976ba0a8b09a55636d2885abf3d69a58e55a578727010`; prior095a52e7… agent backup `\SDMMC\BT\AgentUpdate\old-c105d08e76025a12.exe`.
+- Terminal stopped764, put772/get773:31744B SHA256 `b3e2ad0879f44d992b0ec080aab5dbacdf8e0501cc9c0e8f1ce58abda60198e0`. Backup772 preserves00da812c… shortcut/hidden-board app. Launch774 returns to the persistent PC session. Verify the final job numbers in receipts if interrupted.
+- Full make/check and whitespace checks pass. No Herdr CLI session control or process termination was issued. User must retry the normal prefix once the updated app is visible; real detach confirmation remains pending. Super+Alt+Insert activates forwarding if off; release Ctrl+Space before lowercase d, then use Super+Alt+Insert to return keyboard control to the PC.
+
+---
+
 # Current checkpoint: keyboard-first terminal (2026-11-07)
 
 **Start here.** Super+Alt+Insert is configured to open the Foston terminal and toggle PC keyboard forwarding. The same chord releases forwarding inside evdev capture, since Hyprland cannot see grabbed keys. Touch keys start hidden and remain hidden on PC-mode exit/error; SHOW KB / HIDE KB is explicit. No host window or extra daemon was added.
