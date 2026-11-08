@@ -159,4 +159,4 @@ User ended work for sleep. Preserve the open latency issue and resume from the t
 - [x] Poll physical input/ACK independently of display refresh while preserving lock/seat/error release.
 - [x] Test/build/backed-up deployment; active Hyprland binding and device UI verified.
 - [ ] Optional human test of the physical shortcut in both directions.
-- [x] Update installation/handoff and prepare verified milestones in both repositories; push verification follows.
+- [x] Update installation/handoff; Foston a1d0f35 and ArchMerOS a18817a pushed.

@@ -2,6 +2,7 @@
 
 **Start here.** Super+Alt+Insert is configured to open the Foston terminal and toggle PC keyboard forwarding. The same chord releases forwarding inside evdev capture, since Hyprland cannot see grabbed keys. Touch keys start hidden and remain hidden on PC-mode exit/error; SHOW KB / HIDE KB is explicit. No host window or extra daemon was added.
 
+- Source milestones pushed: Foston `a1d0f35`; ArchMerOS `a18817a` (Lua + legacy binding, executable wrapper, keybinding docs).
 - Terminal stop755 / put756 / get757 / launch758: 31744 bytes, SHA256 `00da812c39768bf87468d97b4eeaf661daf146ab6b4c6d592a896a08f7c1691d`. **Backup756 restores the prior verified18d00491… terminal.** Agent remains095a52e7…; no agent/firmware/boot changes in this milestone.
 - Screenshot759/get760 visually confirms SHOW KB, PC KEYS and full terminal view with touch keys hidden after PC mode exit. CaptureSHA `616ce0a4555004b1dd8ab6b84cc94cf68617043e6540ae3cd8563b42756e4a54`.
 - Host shortcut client uses the existing mode0600 socket, launches only `mero-pc-terminal.exe` through the signed agent, then arms capture. It waits for the shortcut keys to be released and fresh signed foreground-terminal presence. Offline/failed/unknown launch never grabs or resets pending jobs. A nonblocking local lock suppresses overlapping launcher processes. Arming can be cancelled or times out after10s.

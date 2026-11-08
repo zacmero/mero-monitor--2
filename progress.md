@@ -239,3 +239,5 @@ Private durable evidence archive: `/home/zacmero/.local/state/mero/foston-eviden
 - Real Super+Alt+Insert activation/release test requested from user. No automatic real-keyboard grab was injected by the agent.
 
 - Private keyboard timing/UI evidence archived at `/home/zacmero/.local/state/mero/foston-evidence/keyboard-shortcut-20261107-221441` with SHA256 manifest. Full make/check and both repository whitespace checks pass; actual shortcut feedback remains pending.
+
+- Pushed keyboard-first milestone a1d0f35 (Foston) and a18817a (ArchMerOS). Arch SSH authentication was unavailable; same-repository HTTPS push succeeded using existing authentication, origin URL unchanged. Both services active and no further device controls injected during the pending human shortcut test.
