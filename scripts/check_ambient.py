@@ -175,3 +175,21 @@ f=fopen(argv[3],"rb");n=fread(data,1,sizeof(data),f);fclose(f);assert(MeroPhotoD
     subprocess.run(["cc","-I",str(root/"wince"),str(p/"codec.c"),"-o",str(p/"codec")],check=True)
     subprocess.run([str(p/"codec"),str(p/"ok.jpg"),str(p/"bad.jpg"),str(p/"legacy.jpg")],check=True)
 print("PASS: ambient rendering, folder races, source preservation, signed/expired/deduplicated controls, native frame hash/size/demand/close guards")
+
+# Exercise the actual photo draw path: still is the default and uses no scaling.
+with tempfile.TemporaryDirectory() as directory:
+ p=Path(directory)
+ draw=ui[ui.index("static void DrawPhoto("):ui.index("static void Paint(")]
+ (p/"still.c").write_text("""#include <assert.h>
+typedef int HDC;
+static int motion,portrait,frameTick=24,photoDC=1,plain,scaled;
+#define SRCCOPY 1
+static void BitBlt(int dc,int x,int y,int w,int h,int src,int sx,int sy,int mode){assert(w==272&&h==480&&!x&&!y);plain++;}
+static void StretchBlt(int dc,int x,int y,int w,int h,int src,int sx,int sy,int sw,int sh,int mode){assert(sw==272&&sh==480);scaled++;}
+"""+draw+"""
+int main(void){portrait=1;DrawPhoto(1,272,480);assert(plain==1&&!scaled);
+motion=1;DrawPhoto(1,272,480);assert(plain==1&&scaled==1);return 0;}
+""")
+ subprocess.run(["cc",str(p/"still.c"),"-o",str(p/"still")],check=True)
+ subprocess.run([str(p/"still")],check=True)
+print("PASS: native still-photo default avoids resampling; optional motion preserved")

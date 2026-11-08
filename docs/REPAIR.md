@@ -371,3 +371,24 @@ Validation: make, make check, glyph generator, native JPEG rejection/bounds,
 real tmux Unicode and native terminal tests passed. Hardware screenshot checks
 passed; no cold reboot or destructive recovery test. Baseline encrypted
 preservation bundle remains unchanged. User confirmed its passphrase is saved.
+
+## Accepted display line — 2026-11-08
+User reports a vertical blue line that moves/flickers and confirms it is also
+visible on charging/vendor startup screens before Mero. User explicitly said
+to live with it. Stop diagnosis; no firmware/display driver/power/reset tests.
+This points to the device display path rather than an Ambient-only defect;
+physical cause is not established. Screen capture922 contained no obvious
+solid error column. Do not claim the line is software-fixed.
+
+Before that confirmation, a scoped Ambient mitigation was deployed: still
+photos by default use native1:1 BitBlt; existing pan effect retained as menu
+STILL/MOVING toggle. Weather/menu/rotation controls preserved. Stop923,
+put924 (backup924), byte-exact readback925, launch926 all succeeded.
+Current Ambient SHA256
+2b81d3b33e728a2b1c312f5d38b3217116cb83b77b82ca019e74f3610a6032e8.
+User restarted during verification, but the pending launch926 was reconciled
+successfully and there is no unresolved job. Reboot did not remove the line.
+Actual native still/moving draw tests, build and full make check passed.
+Private app/readback receipts: recovery-private/20261108-still/.
+Earlier recovery baseline/increment remain intact. No agent/boot/firmware edits
+in this pass. The user accepted the display artifact; no further action needed.

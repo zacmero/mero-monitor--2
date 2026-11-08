@@ -8,7 +8,7 @@
 #include "../mero-live.h"
 #include "../mero-shell-return.h"
 #include "../mero-ambient.h"
-static int portrait;
+static int portrait,motion;
 static HFONT largeFont,bodyFont,smallFont;
 static HDC photoDC;
 static HBITMAP photoBitmap,oldPhoto;
@@ -140,6 +140,13 @@ static void ReadPhoto(HDC dc) {
     }
     ReleaseMutex(mero_bus_mutex);
 }
+/* Still mode avoids continuous full-photo resampling and scanout tearing. */
+static void DrawPhoto(HDC dc,int width,int height) {
+    if(motion) {
+        int drift=frameTick%48;if(drift>24)drift=48-drift;drift/=4;
+        StretchBlt(dc,-drift,-drift,width+12,height+8,photoDC,0,0,portrait?272:480,portrait?480:272,SRCCOPY);
+    } else BitBlt(dc,0,0,width,height,photoDC,0,0,SRCCOPY);
+}
 static void Paint(HWND h) {
     PAINTSTRUCT ps;HDC screen=BeginPaint(h,&ps),dc=CreateCompatibleDC(screen);
     int width=portrait?272:480,height=portrait?480:272;DWORD *canvas;BITMAPINFO bi;
@@ -147,17 +154,11 @@ static void Paint(HWND h) {
     HBITMAP bitmap=CreateDIBSection(screen,&bi,DIB_RGB_COLORS,(void**)&canvas,NULL,0),old=(HBITMAP)SelectObject(dc,bitmap);
     WCHAR text[192];int i;SetBkMode(dc,TRANSPARENT);
     Fill(dc,0,0,width,height,RGB(12,20,25));ReadPhoto(dc);
-    if(photoDC&&painted[0]) {
-        /* Slow local drift keeps stills alive without another transfer. */
-        int drift=frameTick%48;if(drift>24)drift=48-drift;drift/=4;
-        StretchBlt(dc,-drift,-drift,width+12,height+8,photoDC,0,0,portrait?272:480,portrait?480:272,SRCCOPY);
-    }
+    if(photoDC&&painted[0])DrawPhoto(dc,width,height);
     if(menuVisible) {
+        const WCHAR *labels[]={L"FULL",L"ROTATE",L"WX",motion?L"MOVING":L"STILL",L"SHELL"};
         Fill(dc,0,0,width,36,RGB(10,20,24));
-        Text(dc,smallFont,RGB(210,233,217),L"FULL",5,10,portrait?72:160,32,DT_CENTER|DT_SINGLELINE);
-        Text(dc,smallFont,RGB(210,233,217),L"ROTATE",portrait?72:160,10,portrait?144:240,32,DT_CENTER|DT_SINGLELINE);
-        Text(dc,smallFont,RGB(210,233,217),L"WX",portrait?144:240,10,portrait?208:392,32,DT_CENTER|DT_SINGLELINE);
-        Text(dc,smallFont,RGB(210,233,217),L"SHELL",portrait?208:392,10,width,32,DT_CENTER|DT_SINGLELINE);
+        for(i=0;i<5;i++)Text(dc,smallFont,i==3?RGB(255,197,93):RGB(210,233,217),labels[i],i*width/5,10,(i+1)*width/5,32,DT_CENTER|DT_SINGLELINE);
     }
     if(weatherVisible&&!folderMenu) {
         Fill(dc,12,50,205,174,RGB(12,27,31));
@@ -232,9 +233,11 @@ static LRESULT CALLBACK WindowProc(HWND h,UINT msg,WPARAM w,LPARAM l) {
         if(WeatherTap(x,y)){InvalidateRect(h,NULL,FALSE);return 0;}
         if(!menuVisible){menuVisible=1;InvalidateRect(h,NULL,FALSE);return 0;}
         if(y<36){
-            if(x>=(portrait?208:392)){MeroReturnToShell();DestroyWindow(h);return 0;}
-            if(x>=(portrait?144:240))weatherVisible=!weatherVisible;
-            else if(x>=(portrait?72:160))Queue("ambient-rotate",0);
+            int button=x*5/(portrait?272:480);
+            if(button==4){MeroReturnToShell();DestroyWindow(h);return 0;}
+            if(button==3)motion=!motion;
+            else if(button==2)weatherVisible=!weatherVisible;
+            else if(button==1)Queue("ambient-rotate",0);
             else menuVisible=folderMenu=0;
             InvalidateRect(h,NULL,FALSE);return 0;
         }

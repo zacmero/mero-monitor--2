@@ -173,3 +173,5 @@ Nerd Font icons and uses Cascadia Code, not a Portuguese/accent priority.
 Embedded 11552 glyphs from installed CaskaydiaCove Nerd Font Mono; source hash
 in generated header, font and Nerd attribution preserved. Supplementary Nerd
 icons use reserved wire cells A000..CFFF, input remains original UTF8.
+
+Blue vertical line is user-confirmed on charging/vendor startup screens, independent of Mero. User accepts it; stop diagnosis. Ambient still-mode option is installed but not claimed to fix a device-side line.
