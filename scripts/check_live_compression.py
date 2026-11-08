@@ -58,9 +58,29 @@ int decode(const char *data,const char *codec,char *out,unsigned int cap){return
     assert publish()['job_seq']=='123'
     (share/'agent-job.txt').write_bytes(signed(dict(v=1,device=DEVICE,seq=0,op='idle'),key))
     assert publish()['job_seq']=='0'
+    # Dedicated terminal feed keeps identical signed control metadata, but
+    # carries only terminal text, cinema state and the saved orientation.
+    capability(terminal='1')
+    terminal_line='MERO:TERM:token=0123456789abcdef|text=YWJj'
+    generic=['MERO:POWER:standby=1','MERO:AMB:folder=Photos|portrait=1|names='+('x'*300),
+             'MERO:WX:condition=rain','MERO:NOW:title=Song',terminal_line]
+    live.publish(generic,art='a'*64,art_track='abcdefghijk',ambient='b'*64,keyboard='safe-input')
+    full=verified((share/'live-state.txt').read_bytes(),key)
+    small=verified((share/'live-terminal.txt').read_bytes(),key)
+    assert full['terminal_feed']==small['terminal_feed']=='1'
+    for field in ('serial','epoch','ack','result','job_seq','keyboard','codec_offer'):
+        assert small[field]==full[field]
+    body=base64.b64decode(small['data'])
+    if small['codec']:body=zlib.decompress(body)
+    assert body.decode()=='MERO:POWER:standby=1\nMERO:AMB:portrait=1\n'+terminal_line+'\n'
+    assert not small['art'] and not small['art_track'] and not small['ambient']
+    assert len((share/'live-terminal.txt').read_bytes())<len((share/'live-state.txt').read_bytes())
+    live.publish(['MERO:POWER:standby=0'])
+    assert verified((share/'live-state.txt').read_bytes(),key)['terminal_feed']=='0'
 source=(root/'wince/bluetooth/mero-agent-runtime.h').read_text();section=source[source.index('static void AgentLive(void)'):]
 assert section.index('AgentVerifyLimit(')<section.index('MeroLiveDecode(')
 assert section.index('AgentVerifyLimit(')<section.index('liveJobHintValid=')
+assert section.index('AgentVerifyLimit(')<section.index('compactAvailable=AgentGet(')
 gate=source[source.index('        if(AgentTerminalActive()&&liveJobHintValid'):source.index('        lastJobPoll=GetTickCount();')]
 with tempfile.TemporaryDirectory() as directory:
     folder=Path(directory)
@@ -82,3 +102,33 @@ fast=1;liveJobHintValid=1;tick=5;liveJobHintTick=0xfffffff0;assert(!due(1,5));re
     subprocess.run(['cc',str(folder/'gate.c'),'-o',str(folder/'gate')],check=True)
     subprocess.run([str(folder/'gate')],check=True)
 print('PASS: actual bounded zlib/base64 decode, checksum/truncation/zip-bomb rejection, signed nonce lease and legacy fallback')
+
+# Run the actual native compact/generic read fallback against both host versions.
+reader=source[source.index('static int AgentCompactActive('):source.index('static void AgentLive(void)')]
+with tempfile.TemporaryDirectory() as directory:
+    folder=Path(directory)
+    shim=r'''
+#include <assert.h>
+#include <string.h>
+#define INVALID_HANDLE_VALUE -1
+typedef unsigned int DWORD;static DWORD now,liveLastTick;static int foreground=1;
+static DWORD GetTickCount(void){return now;}static int AgentTerminalActive(void){return foreground;}
+static int answers[2],calls;static char names[2][32];
+static int GetBody(const char*name,void*a,int h,unsigned int*n){(void)a;(void)h;strcpy(names[calls],name);*n=123;return answers[calls++];}
+'''
+    tests=r'''
+int main(void){unsigned int n;
+ now=10000;liveLastTick=9000;assert(AgentCompactActive(1)&&!AgentCompactActive(0));
+ foreground=0;assert(!AgentCompactActive(1));foreground=1;
+ liveLastTick=7000;assert(!AgentCompactActive(1));liveLastTick=0;assert(!AgentCompactActive(1));
+ now=5;liveLastTick=0xfffffff0;assert(AgentCompactActive(1));
+ answers[0]=1;calls=0;assert(AgentReadLive(0,&n)&&calls==1&&!strcmp(names[0],"live-state.txt"));
+ calls=0;assert(AgentReadLive(1,&n)&&calls==1&&!strcmp(names[0],"live-terminal.txt"));
+ calls=0;answers[0]=0;answers[1]=1;assert(AgentReadLive(1,&n)&&calls==2&&!strcmp(names[1],"live-state.txt"));
+ calls=0;answers[1]=0;assert(!AgentReadLive(1,&n)&&calls==2);
+ calls=0;assert(!AgentReadLive(0,&n)&&calls==1);return 0;}
+'''
+    (folder/'reader.c').write_text(shim+reader+tests)
+    subprocess.run(['cc',str(folder/'reader.c'),'-o',str(folder/'reader')],check=True)
+    subprocess.run([str(folder/'reader')],check=True)
+print('PASS: signed compact terminal frame parity and actual native generic-host fallback')

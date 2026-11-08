@@ -88,6 +88,11 @@ replay interrupted mutations. Check the last job and backup if power was lost.
 - `mero-bridge.service` supplies signed live state over Bluetooth. Agent status
   reports `live_generation`, `live_age_sec`, `live_weather` and `live_music`.
   Increasing generations with a small age verify agent reception, not app rendering.
+  The foreground terminal uses a smaller signed `live-terminal.txt` frame; weather
+  and music flags are normally zero there. Other apps retain `live-state.txt`.
+  Transient live events/codec messages are sent from RAM: do not reintroduce
+  `\Temp` staging, which returned ERROR_DISK_FULL and caused reconnect stalls.
+  Durable agent/keyboard journals and deployment flush checks remain required.
 - Music artwork uses a separate single-entry RAM mapping. Keep it bounded to one
   272×272 RGB565 cover. Clear obsolete artwork on track changes and app close.
   Do not replace this with accumulating cover files or per-frame SD writes.

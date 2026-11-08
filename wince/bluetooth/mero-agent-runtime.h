@@ -8,6 +8,9 @@
 static DWORD photoGetMs,photoDecodeMs,photoBytes;
 static DWORD liveGetMs,liveSendMs,livePeriodMs,liveFrameBytes,liveSamples,liveLastTick,jobGetMs;
 static DWORD eventQueueMs,eventWriteMs,eventFirstSendMs;
+static unsigned int sendPackets,sendReply;static int eventFirstOk;
+static unsigned int eventFirstPackets,eventFirstReply;
+static DWORD eventFirstError;
 static char eventMeasuredId[80];
 static unsigned int liveJobHint;static DWORD liveJobHintTick;static int liveJobHintValid;
 static unsigned char agentKey[32];
@@ -28,8 +31,8 @@ static void AgentStatusExtras(char *result,unsigned int cap) {
     len=strlen(result);
     snprintf(result+len,cap-len,"live_get_ms=%lu\nlive_send_ms=%lu\nlive_period_ms=%lu\nlive_frame_bytes=%lu\nlive_samples=%lu\njob_get_ms=%lu\n",liveGetMs,liveSendMs,livePeriodMs,liveFrameBytes,liveSamples,jobGetMs);
     len=strlen(result);
-    snprintf(result+len,cap-len,"event_id=%s\nevent_queue_ms=%lu\nevent_write_ms=%lu\nevent_first_send_ms=%lu\n",
-        eventMeasuredId,eventQueueMs,eventWriteMs,eventFirstSendMs);
+    snprintf(result+len,cap-len,"event_id=%s\nevent_queue_ms=%lu\nevent_write_ms=%lu\nevent_first_send_ms=%lu\nevent_first_ok=%d\nevent_first_packets=%u\nevent_first_reply=%u\nevent_staging=ram\nevent_first_error=%lu\n",
+        eventMeasuredId,eventQueueMs,eventWriteMs,eventFirstSendMs,eventFirstOk,eventFirstPackets,eventFirstReply,eventFirstError);
     if(MeroBusLock()) {
         len=strlen(result);
         snprintf(result+len,cap-len,"live_generation=%lu\nlive_age_sec=%lu\nlive_weather=%d\nlive_music=%d\nlive_ack=%s\nlive_result=%s\n",
@@ -46,9 +49,13 @@ static int AgentHash(const WCHAR *path,char hex[65],unsigned int *size){HANDLE f
 static int AgentCopy(const WCHAR *source,const WCHAR *dest){HANDLE a,b;BYTE buffer[4096];DWORD n,done;unsigned int total=0;int ok=1;a=CreateFileW(source,GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_WRITE,NULL,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,NULL);if(a==INVALID_HANDLE_VALUE)return 0;b=CreateFileW(dest,GENERIC_WRITE,0,NULL,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,NULL);if(b==INVALID_HANDLE_VALUE){CloseHandle(a);return 0;}while(1){if(!ReadFile(a,buffer,sizeof(buffer),&n,NULL)){ok=0;break;}if(!n)break;if(total>AGENT_MAX_FILE-n||!WriteFile(b,buffer,n,&done,NULL)||done!=n){ok=0;break;}total+=n;}if(!FlushFileBuffers(b))ok=0;CloseHandle(a);CloseHandle(b);return ok;}
 static void AgentParents(WCHAR *path){unsigned int i;for(i=1;path[i];i++)if(path[i]=='\\'){WCHAR c=path[i];path[i]=0;CreateDirectoryW(path,NULL);path[i]=c;}}
 static void AgentJobPath(unsigned int seq,const WCHAR *name,WCHAR out[260]){wsprintfW(out,L"%s\\job-%u\\%s",agentRoot,seq,name);}
-static int AgentSend(const char *name,const WCHAR *path){
-    HANDLE f=CreateFileW(path,GENERIC_READ,FILE_SHARE_READ,NULL,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,NULL);DWORD size,got;unsigned int total=0,n,take,response;int first=1,ok=1;
-    if(f==INVALID_HANDLE_VALUE)return 0;size=GetFileSize(f,NULL);if(size>AGENT_MAX_FILE){CloseHandle(f);return 0;}
+static int AgentSendData(const char *name,const WCHAR *path,const char *data,DWORD dataSize){
+    HANDLE f=INVALID_HANDLE_VALUE;DWORD size,got;unsigned int total=0,n,take,response;int first=1,ok=1;
+    sendPackets=sendReply=0;
+    if(data)size=dataSize;
+    else {f=CreateFileW(path,GENERIC_READ,FILE_SHARE_READ,NULL,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,NULL);
+        if(f==INVALID_HANDLE_VALUE)return 0;size=GetFileSize(f,NULL);}
+    if(size>AGENT_MAX_FILE){if(f!=INVALID_HANDLE_VALUE)CloseHandle(f);return 0;}
     do{n=ObexRequest(packet,2,haveId,connectionId,first?name:NULL,NULL);if(first){packet[n++]=0xc3;ObexWrite32(packet+n,size);n+=4;}
         unsigned int limit=peerLimit;
         /* Small control PDUs fit one bounded RFCOMM send, avoiding a split
@@ -58,10 +65,14 @@ static int AgentSend(const char *name,const WCHAR *path){
         if(limit<=n+3){ok=0;break;}
         take=limit-n-3;if(take>size-total)take=size-total;
         packet[0]=(total+take==size)?0x82:2;packet[n++]=(total+take==size)?0x49:0x48;ObexWrite16(packet+n,take+3);n+=2;
-        if(!ReadFile(f,packet+n,take,&got,NULL)||got!=take){ok=0;break;}n+=take;ObexWrite16(packet+1,n);response=Exchange(n);
+        if(data)memcpy(packet+n,data+total,take);
+        else if(!ReadFile(f,packet+n,take,&got,NULL)||got!=take){ok=0;break;}
+        n+=take;ObexWrite16(packet+1,n);response=Exchange(n);sendPackets++;sendReply=response?reply[0]:0;
         if(!response||reply[0]!=(total+take==size?0xa0:0x90)){ok=0;break;}total+=take;first=0;
-    }while(total<size);CloseHandle(f);return ok;
+    }while(total<size);if(f!=INVALID_HANDLE_VALUE)CloseHandle(f);return ok;
 }
+static int AgentSend(const char *name,const WCHAR *path){return AgentSendData(name,path,NULL,0);}
+static int AgentSendMemory(const char *name,const char *data,DWORD size){return AgentSendData(name,NULL,data,size);}
 static int AgentOwnFile(const WCHAR *path){WCHAR self[260];GetModuleFileNameW(NULL,self,260);return !_wcsicmp(self,path);}
 static int AgentControl(const char *name,int launch,const char *args,unsigned int *value){
     WCHAR wide[96],path[260],wideArgs[32];PROCESS_INFORMATION pi;STARTUPINFOW si;
@@ -215,9 +226,10 @@ static void AgentLiveCodec(const char *offer,unsigned int epoch){
     if(strlen(offer)!=16||!AuthUnhex(offer,token,8))return;
     if(!strcmp(previous,offer)&&previousActive==active&&(DWORD)(GetTickCount()-sentTick)<3000)return;
     snprintf(message,sizeof(message),"v=1\ndevice=%s\noffer=%s\ncodec=zlib1\nepoch=%u\nterminal=%d\n",MERO_AGENT_DEVICE,offer,epoch,active);
-    CreateDirectoryW(L"\\Temp",NULL);
-    if(AgentSign(message,sizeof(message),agentKey)&&AgentWrite(L"\\Temp\\MeroLiveCodec.txt",message,strlen(message))&&
-       AgentSend("live-codec.txt",L"\\Temp\\MeroLiveCodec.txt")){strcpy(previous,offer);sentTick=GetTickCount();previousActive=active;}
+    if(AgentSign(message,sizeof(message),agentKey)) {
+        if(AgentSendMemory("live-codec.txt",message,strlen(message))){strcpy(previous,offer);sentTick=GetTickCount();previousActive=active;}
+        else if(sendPackets)ClosePeer();
+    }
 }
 static void AgentLiveEvent(void){
     static char sentId[80]="";static DWORD sentTick;char event[2049],id[80];
@@ -228,29 +240,41 @@ static void AgentLiveEvent(void){
             snprintf(event,sizeof(event),"v=1\ndevice=%s\n%s",MERO_AGENT_DEVICE,mero_bus->event);
     }ReleaseMutex(mero_bus_mutex);
     if(event[0]&&AgentSign(event,sizeof(event),agentKey)){
-        DWORD begin=GetTickCount(),wrote;int written,first=strcmp(eventMeasuredId,id)!=0;
+        DWORD begin=GetTickCount(),error=0;int delivered,first=strcmp(eventMeasuredId,id)!=0;
         if(first){const char *tick=strrchr(id,'-');strcpy(eventMeasuredId,id);
             eventQueueMs=tick?(DWORD)(begin-strtoul(tick+1,NULL,10)):0;
             eventWriteMs=eventFirstSendMs=0;}
-        CreateDirectoryW(L"\\Temp",NULL);
-        written=AgentWrite(L"\\Temp\\MeroLiveEvent.txt",event,strlen(event));wrote=GetTickCount();
-        if(first)eventWriteMs=wrote-begin;
-        if(written&&AgentSend("live-event.txt",L"\\Temp\\MeroLiveEvent.txt")){
+        /* Transient signed input is already in RAM. Do not stage it in the
+           CE object store: local ERROR_DISK_FULL caused multi-second stalls. */
+        delivered=AgentSendMemory("live-event.txt",event,strlen(event));
+        if(!delivered)error=GetLastError();
+        if(delivered){
             strcpy(sentId,id);sentTick=GetTickCount();
-        }else ClosePeer();
+        }else if(sendPackets)ClosePeer();
+        /* A local staging/open/read failure before Exchange has not touched the
+           OBEX session. Keep the link and pending event; retry without reconnect. */
         liveSendMs=GetTickCount()-begin;
-        if(first)eventFirstSendMs=GetTickCount()-wrote;
+        if(first){eventFirstSendMs=GetTickCount()-begin;eventFirstOk=delivered;
+            eventFirstPackets=sendPackets;eventFirstReply=sendReply;
+            eventFirstError=error;}
     }
+}
+static int AgentCompactActive(int available){
+    return available&&AgentTerminalActive()&&liveLastTick&&(DWORD)(GetTickCount()-liveLastTick)<2000;
+}
+static int AgentReadLive(int compact,unsigned int *n){
+    if(GetBody(compact?"live-terminal.txt":"live-state.txt",NULL,INVALID_HANDLE_VALUE,n))return 1;
+    return compact&&GetBody("live-state.txt",NULL,INVALID_HANDLE_VALUE,n);
 }
 static void AgentLive(void) {
     static char serial[40] = "";
-    static int sawFirst;
+    static int sawFirst,compactAvailable;
     char body[8193], version[8], device[32], next[40], epoch[24], data[5600],codec[16]="",offer[17]="",hint[16];
     char lines[MERO_BUS_BYTES], ack[80], result[96],art[65]="",artTrack[32]="",ambient[65]="",keyboard[192]="";
-    unsigned int n, stamp;DWORD began=GetTickCount();
+    unsigned int n, stamp;DWORD began=GetTickCount();int compact=AgentCompactActive(compactAvailable);char feed[8];
     if (channel == INVALID_SOCKET) return;
     AgentLiveEvent();if(channel==INVALID_SOCKET)return;began=GetTickCount();
-    if (!GetBody("live-state.txt", NULL, INVALID_HANDLE_VALUE, &n)) { ClosePeer(); return; }
+    if(!AgentReadLive(compact,&n)){compactAvailable=0;ClosePeer();return;}
     liveGetMs=GetTickCount()-began;liveFrameBytes=n;
     if (n > 8192) return;
     memcpy(body, xml, n); body[n] = 0;
@@ -261,6 +285,7 @@ static void AgentLive(void) {
         !AgentGet(body,"epoch",epoch,sizeof(epoch)) || !AgentNumber(epoch,&stamp) ||
         !AgentGet(body,"data",data,sizeof(data)) ||
         !AgentGet(body,"ack",ack,sizeof(ack)) || !AgentGet(body,"result",result,sizeof(result))) return;
+    compactAvailable=AgentGet(body,"terminal_feed",feed,sizeof(feed))&&!strcmp(feed,"1");
     AgentGet(body,"codec",codec,sizeof(codec));
     if(MeroLiveDecode(data,codec,lines,sizeof(lines))<0)return;
     {unsigned int i;for(i=0;next[i];i++)if(next[i]<'0'||next[i]>'9')return;}
@@ -275,6 +300,7 @@ static void AgentLive(void) {
     }
     AgentGet(body,"codec_offer",offer,sizeof(offer));
     if(strcmp(serial,next))AgentLiveCodec(offer,stamp);
+    if(channel==INVALID_SOCKET)return;
     AgentGet(body,"art",art,sizeof(art));AgentGet(body,"art_track",artTrack,sizeof(artTrack));
     AgentGet(body,"ambient",ambient,sizeof(ambient));
     AgentGet(body,"keyboard",keyboard,sizeof(keyboard));

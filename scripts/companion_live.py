@@ -200,7 +200,8 @@ class BluetoothLive:
         self.serial += 1
         # Capture terminal output after executing the just-arrived input, so
         # the echo need not wait an entire additional publication interval.
-        payload = ("\n".join(line() if callable(line) else line for line in lines) + "\n").encode("utf-8")
+        rendered = [line() if callable(line) else line for line in lines]
+        payload = ("\n".join(rendered) + "\n").encode("utf-8")
         if len(payload) >= 4096:
             raise ValueError("telemetry too large")
         codec=""
@@ -222,4 +223,23 @@ class BluetoothLive:
                       ack=self.ack, result=self.result, art=art, art_track=art_track, ambient=ambient, keyboard=keyboard,
                       codec_offer=self.codec_offer,codec=codec,job_seq=job_seq,
                       data=base64.b64encode(payload).decode())
+        terminal_lines = [line for line in rendered if line.startswith("MERO:TERM:")]
+        fields["terminal_feed"] = int(bool(terminal_lines))
         atomic(self.share / "live-state.txt", signed(fields, self.key))
+        if terminal_lines:
+            # The foreground terminal needs its text, cinema state and orientation,
+            # not gallery folders, weather or album metadata on every refresh.
+            compact = [line for line in rendered if line.startswith("MERO:POWER:")]
+            for line in rendered:
+                if line.startswith("MERO:AMB:"):
+                    match = re.search(r"(?:^|\|)portrait=([01])(?:\||$)", line[9:])
+                    if match:compact.append("MERO:AMB:portrait=" + match[1])
+            compact += terminal_lines
+            compact_payload = ("\n".join(compact) + "\n").encode("utf-8")
+            compact_codec = ""
+            if codec:
+                packed = zlib.compress(compact_payload, 1)
+                if len(packed) < len(compact_payload):compact_payload=packed;compact_codec="zlib1"
+            compact_fields = dict(fields, data=base64.b64encode(compact_payload).decode(),
+                                  codec=compact_codec, art="", art_track="", ambient="")
+            atomic(self.share / "live-terminal.txt", signed(compact_fields, self.key))
