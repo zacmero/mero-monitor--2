@@ -1,3 +1,36 @@
+# Latest checkpoint: terminal transport latency repaired (2026-11-07)
+
+**Start here.** The final retained change is commit `2486955` (pushed): transient signed input/codec messages send directly from RAM, and the foreground terminal uses a smaller signed snapshot. UI timer/posted-flush experiments were rejected and the original terminal was restored.
+
+## Evidence and outcome
+
+- Fresh pre-fix isolated tests: 6092 ms (launch679/get680) and 6854 ms (launch682/get683), one output each. Compact-only test remained6591 ms (693/694).
+- Status695 proved the first attempt failed before any OBEX packet. The intermediate local-retry build measured1713 ms (704/705); status706 identified `ERROR_DISK_FULL` (112) on the CE Temp staging write, despite39 MB freeRAM/6807 MB freeSD. The previous error branch also disconnected the healthy link.
+- RAM-only sender with the original terminal: **928,798,926 ms; median926 ms**, each with one output. These are small-sample input-to-authenticated-RAM-frame measurements, not final-paint timing or a frame-rate guarantee.
+  - launch715/get716: reportSHA `164db500d13b3c0e221f1f6683ec475912a18945c128acbeca2f83806f3ffaf9`.
+  - launch718/get719: reportSHA `cbcfec4fbaf49421204cb1eb7b921ec64f1b7ac74b8ef30878d6a4df1e7f00b3`.
+  - final restored-app launch748/get749: reportSHA `fb1df826248f1dcb06608c95fd2c5996f3957f1dbc9bbf513d10ceabd2ed0e2b`.
+- Status717 confirmed first-send success,2 bounded packets, OBEX success160, staging0/error0. Status751 after returning to Music confirmed the same agent, successful first upload, generic weather/music flags1, age1.
+- Host observer measured154–207 ms event arrival→publishedACK on the slow runs. The large stall was before PC event arrival. Underlying CE storage capacity was not repaired/cleared; transient events no longer depend on staging files. Durable keyboard/agent/deployment journals remain unchanged.
+
+Private durable evidence archive: `/home/zacmero/.local/state/mero/foston-evidence/terminal-latency-20261107-214834` (timing reports, Music capture and SHA256 manifest; no keys or keyed executables).
+
+## Exact installed state and rollback
+
+- **Agent** protected upgrade through status713: SHA256 `095a52e746a8f0b21214bda20297bacacfd76121d09c0131c920bdf40fc9ccb0`, same key/navigation path. Prior intermediate backup `\SDMMC\BT\AgentUpdate\old-cf5f69f1bfe802ab.exe`. Pre-session high-resolution-art agent5d1997b7… is preserved at `BT/AgentUpdate/old-c97b39c17c98f9cc.exe`. Use the protected upgrader for agent rollback; do not overwrite the running agent or reset state.
+- **Terminal** original source restored. Stop744 / signed rollback745 (reference721) / get746 verified31744B SHA256 `18d00491984e3b6bd86fdfe07fde704691b65969c6def4adccd78dc910d77e60`. Experimental versions remain in deployment backups; they are not the final source/device state. A fresh local build may have a different PE timestamp/hash; do not confuse it with the installed verified binary.
+- **Music** unchanged from the verified native272-square artwork milestone: SHA256f3b83d84…, one bounded RGB565 RAM cover, JPEG source preferred over the60px Firefox export. Default orientation and saved startup app unchanged.
+- **Bridge** restarted with compact publisher; normal app feed remains `live-state.txt`. Terminal foreground uses `live-terminal.txt` only after signed advertisement, retaining ACK/keyboard/job/codec fields. Missing files or no advancing frame for2s fall back to generic, including older-host rollback. Compact mode normally has music/weather flags0; that is expected. Generic Music status751 restored both to1.
+- Socket writes/control PUT PDUs remain256B; bulk PUT PDUs512B. Host execution receipts and device durable keyboard journals preserve original safety/flush requirements. No firmware/boot/USB/pairing changes.
+
+## Checks and limits
+
+Full make/check and whitespace checks pass. New checks compile the actual file/RAM sender, verify exact bytes and both packet limits, exercise actual event-worker retry/ACK behavior, and test signed compact-frame parity plus native stale/absent/generic fallback. The terminal UI source/tests are restored to their original implementation.
+
+Timer-only samples1071/1043 ms still queued input~123 ms. Eager posted flush split bursts (1723/1586 ms);10ms batching measured1067/1072 ms. No measured benefit, so none of these UI changes were retained. Do not repeat them based only on requested timer intervals. Physical typing experience still needs user feedback; no new keyboard window or permission step was introduced. If the durable keyboard path reports a write failure, diagnose it without deleting its journal or weakening delivery intent.
+
+---
+
 ## Current artwork checkpoint: native272x272 (2026-11-07)
 
 The prior112-square notes below are historical. Firefox's current MPRIS export was only60x60. The host now prefers matching high-resolution song artwork, prepares272x272 JPEG (quality92, lower only to enforce60000B cap), and retains the restricted Firefox file as offline fallback. Current cover is19288B, smaller than the old25088B raw transfer. Host owned caches remain bounded; no cover files are written to the Foston.

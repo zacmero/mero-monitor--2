@@ -273,3 +273,15 @@ The prior112-square notes below are historical. Firefox's current MPRIS export w
 - Full make/check and whitespace checks pass. Tests cover high-resolution preference, undersized network rejection, source preservation, offline file fallback, reused export path, stale track handling and actual native decoder dimensions/truncation/encoded-size bounds. AGENTS artwork contract now reflects272-square single-cache limit authorized by the user's resolution request.
 
 ---
+
+## Terminal latency: staging failure and repair
+
+Fresh isolated input-to-frame baselines were 6092 and 6854 ms. A compact-only feed reduced transfer size to about 850 bytes but still measured 6591 ms. Status695 showed a failed first attempt before any OBEX packet. The local-retry build measured 1713 ms; status706 identified ERROR_DISK_FULL (112) on the CE temporary-file staging write despite ample free SD space. This error path unnecessarily closed a healthy Bluetooth connection.
+
+The agent now sends transient signed input and codec messages directly from RAM through the existing bounded sender. Agent/deployment journals and durable keyboard delivery intent keep their original flush rules. The first two RAM-only samples were 928 and 798 ms with exactly one output each; status717 confirmed successful first upload, two packets, reply160, zero staging time/error. Foreground terminal frames omit unrelated weather/music/gallery metadata and fall back to the generic signed feed if missing or stalled.
+
+Final agent: protected upgrade through status713, SHA256 `095a52e746a8f0b21214bda20297bacacfd76121d09c0131c920bdf40fc9ccb0`; previous intermediate agent backup `\SDMMC\BT\AgentUpdate\old-cf5f69f1bfe802ab.exe`. The pre-session high-resolution-art agent is preserved at `BT/AgentUpdate/old-c97b39c17c98f9cc.exe`. Host/key/navigation path unchanged; source transport milestone2486955 pushed.
+
+Final terminal candidate: stop728/put729/get730, 32256 bytes, SHA256 `8b6328097055822b3ba907fbb4223b502699fa9c481ec3bfa132aaa9794f1d10`, backup729 preserves the intermediate timer-only app; backup721 preserves the pre-session app. It coalesces an input-message batch into one posted flush, keeping foreground and one-command guards. Final repeated measurements and compatibility evidence follow in NEXT_SESSION.
+
+The UI timer and eager/coalesced flush experiments did not improve measured latency and were not retained. Signed rollback745 restored the original terminal; get746 verified31744B SHA256 `18d00491984e3b6bd86fdfe07fde704691b65969c6def4adccd78dc910d77e60`. Source/tests match the pre-session terminal implementation. Only transport/compact-feed changes remain installed. Experimental backups are preserved.

@@ -126,3 +126,23 @@ Benchmark correction: even later immediate-launch samples6939/7503/7660ms were n
 - Host prepares272x272 JPEG at quality92/subsampling0, reduces quality only if required to stay<=60000B. Current source produces19288B, versus old25088B raw112-square.
 - Device authenticates encoded hash before bounded JPEG decoding; exact272-square dimensions validated before pixel allocation. New versioned MERO_ART565_V2 mapping avoids ABI-size collisions with the prior112-square build. Cache remains one147968B RGB565 cover in RAM, cleared on track/app changes. Ambient decoder still requires240x136; only global JPEG maximum increases to272.
 - Tests compile actual native decoder and check dimensions, truncated/bounded input, high-resolution source preference, tiny remote rejection, safe local fallback/source preservation, reused Firefox paths and track changes. Full make/check passed.
+
+### Further terminal latency: fresh baseline
+- Current high-resolution-art agent5d1997b7…/unchanged terminal: isolated launch679/get6806092ms; launch682/get6836854ms. One output each. Earlier941–2103ms samples were not stable.
+- Second host trace saw event arrival18.082s after observer start (probe includes10s deferral), then publishedACK154ms later. Signed status684: queue243ms, Temp write3ms, first send1ms, later send151ms; GET259ms, frame1602B. Need first-send success/reply diagnostics before asserting network retry cause.
+- Staged compact terminal feed carries only TERM, POWER and saved portrait flag, retains signed keyboard/ACK/job/codec fields, advertises through verified generic frame, falls back to generic on compact read failure. Generic app feed retained separately. Native reader and host signed-frame parity tests pass, full make/check passes. Protected upgrade in progress with explicit first-send outcome/OBEX reply metrics.
+
+### Confirmed local failure triggers unnecessary Bluetooth reconnect
+- Compact feed test693/get694 remained6591ms despite frame851B, GET128ms and period259ms. Host ACK207ms after arrival.
+- Signed status695: event queue109ms, staging3ms, first send2ms, **first_ok0 / first_packets0 / first_reply0**. No Exchange was attempted: the failure is local staging/open/read before transport. Existing AgentLiveEvent unconditionally ClosePeer() on any staging/send failure, imposing expensive radio/connect/bootstrap work.
+- Fix: keep the connection and signed pending event on staging/pre-Exchange failures; close only after an attempted Exchange fails. This does not retry execution or weaken host durable deduplication. Add first-write/error diagnostics to identify the underlying local failure separately. Actual native event-worker test exercises failed write, pre-transfer sender failure, real network failure, success, resend delay and ACK suppression. Full check passed before protected upgrade.
+
+### Exact staging failure and RAM fix
+- Local-retry test704/get7051713ms, one output; status706 first_write_ok0 and error112 (ERROR_DISK_FULL) while freeRAM39MB/SD6807MB. This is the CE staging/object-store operation, not proof the SD is full. Avoiding link teardown helped but still retried local I/O.
+- Transient signed live-event and codec messages now use the same bounded OBEX sender directly from RAM. File-based deployments and durable keyboard/agent journals retain their existing flush/verification rules. Actual shared sender test covers file and memory bytes/caps/empty/error behavior.
+- Compact selection now falls back to generic if no authenticated frame advances for2s, so rollback/restart of an older host cannot strand the terminal on a stale compact file. Actual selection/read test covers inactive, stale, first-frame, tick wrap, absent compact and generic failure.
+
+### Input batching experiment
+- RAM-only transport with the original app measured928/798ms. Moving flush onto the existing50ms reader still queued input for122–123ms and measured1071/1043ms; no proven timer gain.
+- An eager posted flush measured1723/1586ms with queued/ACK=-1: the burst split across multiple signed input packets, so full-marker event matching did not apply. This candidate is not retained as a speed claim.
+- A10ms coalescing yield lets the foreground producer finish queuing before posting one flush. It remains bounded to one posted message, retains foreground/one-mailbox guards, and has a timer fallback if posting fails or ACK is pending. Native tests cover batch/post failure/focus changes. Candidate binary2e695258… installed via737/get738; measurements in progress.

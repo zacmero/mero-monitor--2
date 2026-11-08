@@ -204,3 +204,30 @@ Benchmark audit: initial immediate-injection timing results were confounded by t
 - Stop664; protected upgrade through status671 verified agent5d1997b73b34fdde90ff4048755479d2f894129e3606fad8ae6f29299a454744, backup BT/AgentUpdate/old-52462ed6200a1cda.exe. Bridge restarted successfully; both user services active. Matching app deployment underway.
 
 - Final music put672/get673 verified180638B SHAf3b83d84…; backup672 preserves previous112-square app. Launch674 then screen675/get676 visually verified crisp native-width actual album artwork and fresh Korean Bodega track/timing. ScreenshotSHA9a7e142e…. Formats/versioned ABI and paired rollback requirements documented.
+
+### Terminal optimization: compact feed experiment
+- Fresh baseline now6092/6854ms, one output each; host ACK publication154ms after event arrival in second run. First send duration1–2ms and subsequent retransmission~150ms needed explicit success/reply diagnostics; no cause assumed.
+- Added authenticated compact foreground-terminal feed (TERM/POWER/orientation), preserving keyboard/ACK/job/codec fields. Generic feed retained; capability advertised only in signed frame, actual native read fallback tested. Full make/check passed.
+- Protected upgrade through status691 verified agent96138b40d31c46ced217222b0107699cd4ee4404713d6016fdabc7f8eeaf9989; backup BT/AgentUpdate/old-c97b39c17c98f9cc.exe. Bridge restarted. New status includes first-send success/packet count/final OBEX reply. Terminal launch692; isolated probe693 running.
+
+- Compact-only isolated693/get6946591ms; status695 first_ok0/packets0/reply0 confirms pre-Exchange local failure still tears down link. Fix keeps link/pending command on staging/pre-transfer failures, reconnects only after attempted Exchange failure. Actual event-worker regression covers both local failure stages, network failure, eventual success and ACK/resend suppression; full checks pass.
+- Protected fix upgrade through status702 verified agentcbbb2dc265930e4d4ab56b3fbb1520a6d31da05be06692887f419324202eba03, backup BT/AgentUpdate/old-746d2ad21ad12fd6.exe. First write/error diagnostics added.
+
+- Local-retry probe704/get7051713ms (one output); status706 isolated exact error112 with first_write_ok0. Transient event/codec messages now send directly from RAM through the same tested bounded sender. Durable keyboard/agent/deployment journals unchanged. Compact feed falls back if frames stop advancing for2s, including old-host rollback.
+- Full make/check passed. Protected final upgrade through status713 verified agent095a52e746a8f0b21214bda20297bacacfd76121d09c0131c920bdf40fc9ccb0, backup BT/AgentUpdate/old-cf5f69f1bfe802ab.exe (local-retry intermediate build). Pre-session high-resolution-art agent5d1997b7… is preserved at BT/AgentUpdate/old-c97b39c17c98f9cc.exe.
+
+- First RAM-only probes715/get716928ms,718/get719798ms; one output each. Status717 shows first_ok1,2 packets,reply160,zero staging/error.
+- Timer-only app update stop720/put721/get722 verified31744B SHA2c5b971b0ea5f3c4ef6815598b5bc34265ace6730b9cf7c4afe3cf65facb28ad. Probes724/get7251071ms and726/get7271043ms, queued123/122ms: shorter requested timer did not remove coarse input scheduling.
+- New app posts one coalesced flush message after an input batch, preserving foreground guard and one outstanding bus command. Existing50ms reader handles ACK-driven retry; redraw stays100ms. Actual native helper test covers batch coalescing, failed PostMessage and focus loss. Full checks pass.
+
+- Eager posted-flush candidate stop728/put729/get730 SHA8b632809… measured1723ms (get733) and1586ms (get735), marker once but queued/ACK=-1 because injected burst split across commands. Rejected as a speed improvement. Next candidate yields10ms once per coalesced batch so producer can finish enqueueing before the flush; timer remains an ACK/retry fallback. Native tests cover exactly one yield/post per batch and focus/post failures.
+
+-10ms batching candidate737/get738 measured1067/1072ms, queued123/129ms; no demonstrated improvement. UI timer/posted/batching changes were removed from source/tests. Stopped744, signed rollback745 restored backup721; read-back746 confirmed original31744B SHA18d00491984e3b6bd86fdfe07fde704691b65969c6def4adccd78dc910d77e60. Experimental versions are preserved in signed deployment backups.
+- Final retained changes are transport/RAM staging and compact snapshots only (commit2486955 pushed). Final make/check passes with original terminal source restored. Final confirmation probe748 running after launch747.
+
+- Final original-app confirmation launch748/get749926ms, one output. Retained combination:928/798/926ms (median926), versus fresh pre-fix6092/6854ms. Small isolated sample, RAM-frame receipt rather than paint; no frame-rate guarantee.
+- Music launch750 returned to generic feed; status751 confirmed agent095a52e7…, live_age1, music/weather1, first input upload successful with error0, RAM staging. Music visual capture752/get753 in progress.
+
+- Music screenshot752/get753 matched the previously inspected native-width sharp cover exactly (SHA9a7e142e…), confirming generic app output after compact-terminal testing. Returning to Terminal for optional hands-on input feedback; no further injected commands are planned.
+
+Private durable evidence archive: `/home/zacmero/.local/state/mero/foston-evidence/terminal-latency-20261107-214834` (timing reports, Music capture and SHA256 manifest; no keys or keyed executables).

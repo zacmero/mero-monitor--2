@@ -142,3 +142,12 @@ User ended work for sleep. Preserve the open latency issue and resume from the t
 - [x] Protected agent upgrade; stopped-app deployment/read-back; restart bridge.
 - [x] Verify actual rendered cover through authenticated screen675/get676.
 - [x] Record installed hashes/backups; commit and push.
+
+## Further terminal latency work
+- [x] Resume measured baseline:6092ms, one output. Prior sub-two-second results not stable.
+- [x] Trace event arrival/ACK: first attempt fails locally before any packet, yet resets Bluetooth. Fix local retry without link reset and test actual worker.
+- [x] Test and deploy negotiated compact foreground-terminal snapshots with generic-feed fallback.
+- [x] RAM sender probes928/798ms versus fresh6092/6854ms baselines; first-send success/error diagnostics confirm staging stall removed.
+- [x] Reject UI scheduling experiments: no proven benefit. Restore original terminal via signed rollback745/get746. Retained combination measured928/798/926ms with one output each.
+- [x] Verify generic-feed return and Music capture, record evidence; transport commit2486955 pushed.
+- [x] Save final handoff/verification and private evidence; optional human typing feedback requested.
