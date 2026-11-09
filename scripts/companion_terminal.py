@@ -115,6 +115,7 @@ class Terminal:
             # then use a compact prompt and our small fastfetch configuration.
             rc = ('export MERO_FASTFETCH_SHOWN=1\n'
                   '[[ -r ~/.bashrc ]] && source ~/.bashrc\n'
+                  'top() { python3 "'+str(Path(__file__).with_name('foston_top.py'))+'" "$@"; }\n'
                   'unset PROMPT_COMMAND\nPS1="\\[\\e[38;5;114m\\]mero:\\W\\$ \\[\\e[0m\\]"\n'
                   'printf "\\033[2J\\033[H"\n'
                   '/usr/bin/fastfetch --config "${MERO_FOSTON_STATE}/fastfetch.json"\n')

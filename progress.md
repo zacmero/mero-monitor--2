@@ -404,3 +404,5 @@ with no Hyprland instance variable. Actual wrapper test returned arming, then
 physical; bridge opened event5/event2, then released automatically to touch.
 Final PC keyboard ownership is local. Full make check and whitespace check
 passed, including missing-env/stale-session/ambiguity regression tests.
+
+Foston-only top: scripts/foston_top.py provides PID, CPU percent, RSS MiB and process name in a compact curses view. q exits. top function is scoped to the managed Foston Bash rc and installed in its current session; normal PC top unchanged. CPU percent is ps lifetime average (labelled), not interval utilization. Live process parsing, actual pane rendering and terminal regression checks passed.
