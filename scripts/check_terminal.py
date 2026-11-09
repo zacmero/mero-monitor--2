@@ -12,10 +12,26 @@ from types import SimpleNamespace
 from unittest.mock import patch
 import companion_live as live
 from companion_terminal import Terminal, TARGETS, terminal_cells
-from companion_keyboard import Layout,Keyboard,EVENT,KeysHeld
+from companion_keyboard import Layout,Keyboard,EVENT,KeysHeld,hyprland_command
 
 
 def check():
+    # A boot-started bridge has no compositor env; select only its local login.
+    with tempfile.TemporaryDirectory() as directory:
+        proc=Path(directory)
+        for pid,session in ((10,'6'),(11,'old')):
+            (proc/str(pid)).mkdir();(proc/str(pid)/'environ').write_bytes(('XDG_SESSION_ID='+session+'\0').encode())
+        instances=[dict(pid=10,instance='active_123'),dict(pid=11,instance='stale_456')]
+        with patch('companion_keyboard.subprocess.run',return_value=SimpleNamespace(stdout=json.dumps(instances))),patch.dict('os.environ',{},clear=True):
+            assert hyprland_command('6',proc)==['hyprctl','-i','active_123']
+            try:hyprland_command('other',proc)
+            except RuntimeError:pass
+            else:raise AssertionError('another login session accepted')
+        instances[1]['pid']=10
+        with patch('companion_keyboard.subprocess.run',return_value=SimpleNamespace(stdout=json.dumps(instances))):
+            try:hyprland_command('6',proc)
+            except RuntimeError:pass
+            else:raise AssertionError('ambiguous compositor accepted')
     assert terminal_cells("ação café ┌─┐ ←→ ∑ ⣿",32)=="ação café ┌─┐ ←→ ∑ ⣿"
     assert terminal_cells("a\u0303",1)=="ã"
     assert terminal_cells("\ue0b0\uf07b\U000f013a",3)=="\ue0b0\uf07b\ua13a"

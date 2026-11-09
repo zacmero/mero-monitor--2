@@ -88,3 +88,12 @@ Font source SHA256 is recorded in the header. Licenses/attribution are under
 wince/terminal. Icons are embedded in this app; a system-wide CE font is not
 installed. Original UTF8 keyboard input is preserved. Supplementary Nerd icon
 output uses reserved compact display cells, not literal remapped input.
+
+## Shortcut availability after reboot
+The bridge can start before Hyprland and therefore lack compositor environment
+variables. Keyboard forwarding discovers the compositor at activation through
+`hyprctl instances -j`, checks its process belongs to the current user and logind
+Display session, and queries it using `hyprctl -i INSTANCE`. Do not fix this by
+repeatedly importing environment variables or restarting the bridge after every
+login. Multiple matching sessions fail closed. The active/unlocked seat and key
+release requirements still apply, and the existing udev setup remains required.

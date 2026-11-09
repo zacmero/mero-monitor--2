@@ -175,3 +175,5 @@ in generated header, font and Nerd attribution preserved. Supplementary Nerd
 icons use reserved wire cells A000..CFFF, input remains original UTF8.
 
 Blue vertical line is user-confirmed on charging/vendor startup screens, independent of Mero. User accepts it; stop diagnosis. Ambient still-mode option is installed but not claimed to fix a device-side line.
+
+Host reboot shortcut failure: bridge user service started before compositor, lacked HYPRLAND_INSTANCE_SIGNATURE; exact layout query failed. Per-activation current-user/logind-session compositor discovery fixes it without permission changes. Live wrapper/capture/release verified.

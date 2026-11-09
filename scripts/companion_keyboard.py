@@ -74,6 +74,27 @@ class Layout:
         self.state_free(self.state);self.map_free(self.keymap);self.context_free(self.context)
 
 
+def hyprland_command(session,proc_root=Path("/proc")):
+    """Resolve the compositor for the current local session, even after boot.
+
+    User services can predate Hyprland and lack its instance environment. Never
+    pick another user's compositor or a stale/different login session.
+    """
+    result=subprocess.run(['hyprctl','instances','-j'],capture_output=True,text=True,timeout=.5,check=True)
+    candidates=[]
+    for instance in json.loads(result.stdout):
+        try:
+            pid=int(instance['pid']);name=instance['instance']
+            if pid<=0 or not isinstance(name,str) or not name or len(name)>200 or any(c not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-' for c in name) or name.startswith('-'):continue
+            process=proc_root/str(pid)
+            if process.stat().st_uid!=os.getuid():continue
+            environment=dict(item.split(b'=',1) for item in (process/'environ').read_bytes().split(b'\0') if b'=' in item)
+            if environment.get(b'XDG_SESSION_ID')==session.encode():candidates.append(name)
+        except (OSError,ValueError,KeyError,TypeError):continue
+    if len(candidates)!=1:raise RuntimeError('Cannot identify active local Hyprland session')
+    return ['hyprctl','-i',candidates[0]]
+
+
 class Keyboard:
     def __init__(self):
         self.fds=[];self.layout=None;self.queue=b'';self.session='';self.typing_fd=None;self.next_seat_check=0
@@ -91,12 +112,16 @@ class Keyboard:
         self.session=subprocess.run(['loginctl','show-user',str(os.getuid()),'-p','Display','--value'],
                                     capture_output=True,text=True,timeout=.5,check=True).stdout.strip()
         if not self.session:raise RuntimeError('No local desktop session')
+        result=subprocess.run(['loginctl','show-session',self.session,'-p','Active','-p','LockedHint'],capture_output=True,text=True,timeout=.5,check=True)
+        state=dict(line.split('=',1) for line in result.stdout.splitlines())
+        if state.get('Active')!='yes' or state.get('LockedHint')!='no':raise RuntimeError('Desktop locked or inactive - PC keyboard released')
+        hyprctl=hyprland_command(self.session)
         options={}
         for key in ['kb_layout','kb_variant','kb_options']:
-            r=subprocess.run(['hyprctl','getoption','input:'+key,'-j'],capture_output=True,text=True,timeout=.5,check=True)
+            r=subprocess.run(hyprctl+['getoption','input:'+key,'-j'],capture_output=True,text=True,timeout=.5,check=True)
             options[key]=json.loads(r.stdout).get('str','')
         active=''
-        r=subprocess.run(['hyprctl','devices','-j'],capture_output=True,text=True,timeout=.5,check=True)
+        r=subprocess.run(hyprctl+['devices','-j'],capture_output=True,text=True,timeout=.5,check=True)
         for keyboard in json.loads(r.stdout).get('keyboards',[]):
             if keyboard.get('main'):active=keyboard.get('active_keymap','')
         self.layout=Layout(options['kb_layout'] or 'us',options['kb_variant'],options['kb_options'],active)

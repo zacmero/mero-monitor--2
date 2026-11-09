@@ -384,3 +384,23 @@ Stop928 / put929 (backup929) / byte-exact readback930 / home launch931 passed.
 Installed shell66560B SHA256
 bfa8f952d336eb41576747cf071321c824ec94fdc1c8223582fda8bc3ebd3bc4.
 Build, launcher tests and full make check passed.
+
+## Shortcut after host reboot — 2026-11-08
+Super+Alt+Insert binding and saved keyboard udev ACLs were correct; the device
+answered signed status936 with live age0. The boot-started mero-bridge process
+lacked HYPRLAND_INSTANCE_SIGNATURE/WAYLAND_DISPLAY, so Keyboard.start failed
+at hyprctl getoption before grabbing input. Published terminal metadata
+contained the subprocess error. This was not Bluetooth or keyboard permissions.
+
+Keyboard.start now resolves hyprctl instances to the current logind Display
+session using the same user's compositor process environment, then uses an
+explicit -i instance. Missing/different/ambiguous sessions fail closed.
+Active/unlocked checks happen before capture; ongoing seat/lock/error release
+and shortcut key-release guards remain intact. No environment import workaround,
+extra host window, sudo or device change.
+
+Restarted bridge and verified layout query in its actual startup environment
+with no Hyprland instance variable. Actual wrapper test returned arming, then
+physical; bridge opened event5/event2, then released automatically to touch.
+Final PC keyboard ownership is local. Full make check and whitespace check
+passed, including missing-env/stale-session/ambiguity regression tests.
